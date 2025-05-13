@@ -1,3 +1,0 @@
-# USER
-
-Hey chat!

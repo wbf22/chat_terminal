@@ -13,12 +13,36 @@ import threading
 import time
 
 
+# define arguments
 parser = argparse.ArgumentParser(description="A terminal app for accessing chat gpt")
-# parser.add_argument_group()
 parser.add_argument('-k', '--api_key', required=True, help='Your open-api key created at https://platform.openai.com/api-keys')
 parser.add_argument('-t', '--tokens', type=int, default=4096, help="Max tokens chat will respond with")
 parser.add_argument('-m', '--model', help='The api model you\'ll access. View models here https://platform.openai.com/docs/models', default='gpt-4.1-nano')
 parser.add_argument('-T', '--temperature', type=float, default=0.4,  help='Higher values like 0.8 will make the output more random, while lower values like 0.2 will make it more focused and deterministic. Range 0-2')
+
+# add in app command notes
+subparsers = parser.add_subparsers(dest='command', title='Commands')
+vim_parser = subparsers.add_parser(
+    'vim', 
+    help='''
+        To edit a message sent to chat gpt, you can type 'vim' + 'enter' and the conversation will opened in vim.
+        This can be handy if you want to copy and paste or create newlines in your response without sending
+        the message to chat gpt. To submit the message simply save and quit vim by entering 'esc' then ':' 
+        the 'wq' and hit 'enter'. 
+
+        Previous messages will also be visible in vim, though editing these messages won't alter the conversation
+        history. Only new content after the last '# USER' tag will be retrieved after you're finished. 
+    '''
+)
+quit_parser = subparsers.add_parser(
+    'quit',
+    help='''
+        To finish the conversation you can type 'quit' or 'q' and hit enter. You'll then be given the option
+        to get your conversation output to a file.
+    '''
+)
+
+
 args = parser.parse_args()
 
 MODEL = args.model
@@ -92,6 +116,7 @@ def loading_indicator():
     sys.stdout.flush()
 
 
+
 def write_history(history):
     with open(FILE_PATH, 'w') as file:
         for message in history:
@@ -129,7 +154,7 @@ while(True):
         
         # load history into file
         write_history(history)
-        with open(FILE_PATH, 'w') as file:
+        with open(FILE_PATH, 'a') as file:
             file.write('# USER') 
             file.write('\n\n\n')
 
@@ -143,7 +168,7 @@ while(True):
         user_input = content[last_message_start+6:]
         print(user_input)
 
-    elif user_input.startswith('quit'):
+    elif user_input.startswith('quit') or user_input == 'q':
         print()
         print(user_color + "Save conversation to 'chat.md'? (y/n) ", end='')
         user_input = input()
