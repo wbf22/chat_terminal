@@ -11,8 +11,8 @@
             "program": "chat.py",
             "console": "integratedTerminal",
             "args" :[
-                "-k", ""
-                // "-h"
+                "-k", "",
+                // "-a"
             ]
         }
     ]

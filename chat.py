@@ -9,8 +9,10 @@ import json
 import sys
 import argparse
 import http.client
+import termios
 import threading
 import time
+import tty
 
 
 # define arguments
@@ -19,6 +21,7 @@ parser.add_argument('-k', '--api_key', required=True, help='Your open-api key cr
 parser.add_argument('-t', '--tokens', type=int, default=4096, help="Max tokens chat will respond with")
 parser.add_argument('-m', '--model', help='The api model you\'ll access. View models here https://platform.openai.com/docs/models', default='gpt-4.1-nano')
 parser.add_argument('-T', '--temperature', type=float, default=0.4,  help='Higher values like 0.8 will make the output more random, while lower values like 0.2 will make it more focused and deterministic. Range 0-2')
+# parser.add_argument('-a', '--auto', action='store_true', help='Puts model in auto mode where it iterates on code in a folder running the code and iterating until achieving the prompt request.')
 
 # add in app command notes
 subparsers = parser.add_subparsers(dest='command', title='Commands')
@@ -77,6 +80,7 @@ error_color = color_code(255, 0, 0)
 FILE_PATH = 'chat.md'
 ASSISTANT = 'assistant'
 USER = 'user'
+RUN_COMMAND = ''
 
 
 # history = [
@@ -115,8 +119,6 @@ def loading_indicator():
     sys.stdout.write("\033[?25h")
     sys.stdout.flush()
 
-
-
 def write_history(history):
     with open(FILE_PATH, 'w') as file:
         for message in history:
@@ -135,12 +137,8 @@ def write_history(history):
                 file.write(message['content'])
                 file.write('\n\n\n')
 
-history = []
-while(True):
-
-    print(user_color + 'USER' + ANSII_RESET)
-    print()
-
+def user_prompt():
+    
     user_input = input()
 
     if user_input.startswith('vim'):
@@ -169,13 +167,114 @@ while(True):
         print(user_input)
 
     elif user_input.startswith('quit') or user_input == 'q':
+        exit(0)
+    elif user_input.startswith("save"):
         print()
         print(user_color + "Save conversation to 'chat.md'? (y/n) ", end='')
         user_input = input()
+        print()
         if (user_input == 'y'):
             write_history(history)
         exit(0)
+    elif user_input.startswith("auto"):
+        print(user_color + 'In auto mode! Your ai helper will iterate in this directory until it believes it has achieved the goal you provide it. Once started, the model will continue unless type something or it achieves it\'s goal' + ANSII_RESET)
+        print()
+        auto_mode()
 
+    return user_input
+
+stop = threading.Event()
+def auto_mode_loop():
+
+
+    # get prompt
+    
+    print(user_color + 'USER PROMPT: (what you want the ai helper to do)' + ANSII_RESET)
+    print()
+
+    user_input = user_prompt()
+
+    print()
+    print()
+
+    # add user_input to history
+    history.append({
+        'role': USER,
+        'content': user_input
+    })
+
+    
+    def input_listener():
+        fd = sys.stdin.fileno()
+        old = termios.tcgetattr(fd)
+        try:
+            tty.setraw(fd)
+            sys.stdin.read(1)  # wait for any keypress
+            stop.set()         # signal both threads to stop
+        finally:
+            termios.tcsetattr(fd, termios.TCSADRAIN, old)
+
+    def ai_loop():
+        i = 0
+        while not stop.is_set():
+            print(f"Output line {i}")
+            i += 1
+            time.sleep(0.5)
+
+    t1 = threading.Thread(target=input_listener, daemon=True)
+    t2 = threading.Thread(target=ai_loop, daemon=True)
+
+    t1.start()
+    t2.start()
+    t1.join()
+
+
+    print(user_color + 'Ai helper paused, continue current auto mode setup with new prompt? (y/n)' + ANSII_RESET)
+    print()
+    user_input = user_prompt()
+    print()
+    print()
+
+    if user_input.lower() == "y":
+        auto_mode_loop()
+
+
+
+
+def auto_mode():
+    
+    # get run command
+    if not len(RUN_COMMAND) == 0:
+        print(user_color + f"Use previous run command '{RUN_COMMAND}'? (y/n)" + ANSII_RESET)
+        print()
+        user_input = input()
+        RUN_COMMAND = '' if user_input.lower() == "n" else RUN_COMMAND
+        
+    if len(RUN_COMMAND) == 0:
+        print(user_color + "RUN COMMAND: (eg. 'sh run_my_app.sh')" + ANSII_RESET)
+        print()
+        RUN_COMMAND = input()
+
+
+
+
+    # loop
+        
+
+
+
+
+
+
+# MAIN CODE
+
+history = []
+while(True):
+
+    print(user_color + 'USER' + ANSII_RESET)
+    print()
+
+    user_input = user_prompt()
 
     print()
     print()
@@ -240,7 +339,7 @@ while(True):
     )
     print()
     if (error):
-        print({error_color} + message['content'] + {ANSII_RESET})
+        print(error_color + message['content'] + ANSII_RESET)
     else:
         print(message['content'])
     print()
