@@ -14,8 +14,7 @@
                 "-k", "",
                 "--cmd", "python3 auto_mode_test/main.py",
                 "--dir", "auto_mode_test",
-                "--auto",
-                // "-a"
+                "--auto"
             ]
         }
     ]

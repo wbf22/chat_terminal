@@ -349,6 +349,10 @@ write to file {args["path"]}
     return result
 
 def ai_auto_mode_prompt(model_input):
+    global request_done
+    time_elapsed_displayer = threading.Thread(target=loading_indicator)
+    time_elapsed_displayer.start()
+
     body = json.dumps({
         "conversation": CONVERSATION_ID,
         "model": MODEL,
@@ -373,11 +377,15 @@ def ai_auto_mode_prompt(model_input):
     if response.status == 200:
         data = response.read()
         response_body = json.loads(data)
-        output = response_body['output'][-1]
+        output = response_body['output']
     else:
         output = f"Error: {response.status} - {response.read().decode()}{ANSII_RESET}"
         error = True
     conn.close()
+
+    request_done = True
+    time_elapsed_displayer.join()
+    request_done = False
 
     return output, error
 
@@ -413,39 +421,41 @@ it's important.
     while not stop.is_set() and i < max_attempts:
 
         # prompt ai and handle response
-        output, error = ai_auto_mode_prompt(input_to_model)
+        outputs, error = ai_auto_mode_prompt(input_to_model)
+        input_to_model = []
         if not error:
-            type = output['type']
-            if type == "message":
-                message = output['content'][0]['text']
-                print_and_save_ai_message_to_history(message, False)
-                user_res = print_and_save_user_input_to_history()
-                input_to_model = [
-                    {
-                        "content": user_res,
-                        "role": USER,
-                    }
-                ]
-            elif type == "function_call":
-                name = output['name']
-                args = {}
-                if 'arguments' in output:
-                    args = json.loads(output['arguments'])
-                call_id = output['call_id']
-                sys.stdout.write(f"{model_color}{name} {output['arguments']} {call_id}{ANSII_RESET}")
-                sys.stdout.write("\r\n\r\n")
-                result = handle_function_call(name, args, call_id)
-                sys.stdout.write(f"{output_color}{result}{ANSII_RESET}")
-                sys.stdout.write("\r\n\r\n")
-                input_to_model = [
-                    {
-                        "type": "function_call_output",
-                        "call_id": call_id,
-                        "output": result
-                    }
-                ]
+            for output in outputs:
+                type = output['type']
+                if type == "message":
+                    message = output['content'][0]['text']
+                    print_and_save_ai_message_to_history(message, False)
+                    user_res = print_and_save_user_input_to_history()
+                    input_to_model.append(
+                        {
+                            "content": user_res,
+                            "role": USER,
+                        }
+                    )
+                elif type == "function_call":
+                    name = output['name']
+                    args = {}
+                    if 'arguments' in output:
+                        args = json.loads(output['arguments'])
+                    call_id = output['call_id']
+                    sys.stdout.write(f"{model_color}{name} {output['arguments']} {call_id}{ANSII_RESET}")
+                    sys.stdout.write("\r\n\r\n")
+                    result = handle_function_call(name, args, call_id)
+                    sys.stdout.write(f"{output_color}{result}{ANSII_RESET}")
+                    sys.stdout.write("\r\n\r\n")
+                    input_to_model.append(
+                        {
+                            "type": "function_call_output",
+                            "call_id": call_id,
+                            "output": result
+                        }
+                    )
         else:
-            message = output
+            message = outputs
             print_and_save_ai_message_to_history(message, error)
 
         i += 1
@@ -540,7 +550,8 @@ while(True):
     error = False
     if response.status == 200:
         data = response.read()
-        message = json.loads(data)['output']['content']['text']
+        response_body = json.loads(data)
+        message = response_body['output'][-1]['content'][-1]['text']
     else:
         message = f"Error: {response.status} - {response.reason}{ANSII_RESET}"
         error = True
