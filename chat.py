@@ -19,6 +19,7 @@ import termios
 import threading
 import time
 import tty
+from typing import Optional
 
 
 # define arguments
@@ -121,66 +122,55 @@ def loading_indicator():
     sys.stdout.flush()
 
 def print_and_save_ai_message_to_history(ai_message, error):
-    global history
 
     # print out response
-    print(
+    print_s(
         assistant_color + 'ASSISTANT' + ANSII_RESET, 
         '(', 
         model_color + MODEL, 
         temperature_color + str(TEMPERATURE) + ANSII_RESET,
         ')'
     )
-    sys.stdout.write("\r\n")
+    print_s("\n")
     if (error):
-        sys.stdout.write(error_color + ai_message + ANSII_RESET)
+        print_s(error_color + ai_message + ANSII_RESET)
     else:
-        sys.stdout.write(ai_message)
-    sys.stdout.write("\r\n\r\n")
+        print_s(ai_message)
+    print_s()
 
+def strip_ansi(text):
+    n_text = re.sub(r'[\x1b\033]\[[0-9;]*[a-zA-Z]', "", text)
+    return n_text
 
-    # add to history
-    history.append({
-        'role': ASSISTANT,
-        'content': ai_message
-    })
+history = []
+def print_s(
+    *values: object,
+    sep: Optional[str] = " ",
+    end: Optional[str] = "\n",
+    file: Optional[str] = None,
+    flush: bool = False,
+):
+    history.append(sep.join(strip_ansi(str(v)) for v in values) + (end or ""))
+    print(*values, sep=sep, end=end, flush=flush, file=file)
 
+USER_TAG = 'YOU: (type help for special commands)'
 def print_and_save_user_input_to_history():
 
     # get prompt
     user_input = ''
     while user_input == '':
-        sys.stdout.write(user_color + 'YOU: (type help for special commands)' + ANSII_RESET)
-        sys.stdout.write("\r\n\r\n")
+        print_s(user_color + USER_TAG + ANSII_RESET)
+        print_s()
         user_input = user_prompt()
 
-    sys.stdout.write("\r\n\r\n")
-
-    # add user_input to history
-    history.append({
-        'role': USER,
-        'content': user_input
-    })
+    print_s()
 
     return user_input
 
 def write_history(history):
     with open(FILE_PATH, 'w') as file:
-        for message in history:
-            if message['role'] == ASSISTANT:
-                file.write('# ASSISTANT ')
-                file.write('(') 
-                file.write(MODEL + " ") 
-                file.write(str(TEMPERATURE))
-                file.write(')')
-                file.write('\n\n')
-                file.write(message['content'])
-                file.write('\n\n\n')
-            else:
-                file.write('# USER') 
-                file.write('\n\n')
-                file.write(message['content'])
-                file.write('\n\n\n')
+        file.write("".join(history))
+        file.write("\n")
 
 auto_prompt = ""
 def user_prompt():
@@ -191,47 +181,45 @@ def user_prompt():
     if user_input.strip() == 'vim':
 
         # clear last two lines
-        sys.stdout.write('\x1b[1A')
-        sys.stdout.write('\x1b[K')
-        sys.stdout.write('\x1b[1A')
-        sys.stdout.write('\x1b[K')
+        print_s('\x1b[1A', end="")
+        print_s('\x1b[K', end="")
+        print_s('\x1b[1A', end="")
+        print_s('\x1b[K', end="")
         sys.stdout.flush()
         
         # load history into file
         write_history(history)
-        with open(FILE_PATH, 'a') as file:
-            file.write('# USER') 
-            file.write('\n\n\n')
 
         # open vim for user
         subprocess.run(['vim', '+', FILE_PATH])
         with open(FILE_PATH, 'r') as file:
             content = file.read()
+        os.remove(FILE_PATH)
 
         # parse out last user input and store in user_input
-        last_message_start = content.rfind("# USER")
-        user_input = content[last_message_start+6:]
-        print(user_input)
+        last_message_start = content.rfind(USER_TAG)
+        user_input = content[last_message_start+37:]
+        print_s(user_input)
 
     elif user_input.strip() == 'quit' or user_input == 'q':
         exit(0)
     elif user_input.strip() == "save":
-        print()
-        print(user_color + "Save conversation to 'chat.md'? (y/n) ", end='')
+        print_s()
+        print_s(user_color + "Save conversation to 'chat.md'? (y/n) ", end='')
         user_input = input()
-        print()
+        print_s()
         if (user_input == 'y'):
             write_history(history)
         exit(0)
     elif user_input.strip() == "auto":
 
         NO_QUESTIONS_IN_AUTO_MODE = True
-        print(f'{model_color}In auto mode! Your ai helper will iterate in this directory until it believes it has achieved the goal you provide it. Once started, the model will continue it achieves it\'s goal or hits the max attempts limit{ANSII_RESET}')
-        print()
+        print_s(f'{model_color}In auto mode! Your ai helper will iterate in this directory until it believes it has achieved the goal you provide it. Once started, the model will continue it achieves it\'s goal or hits the max attempts limit{ANSII_RESET}')
+        print_s()
         MAX_ACTIONS = input(f"{user_color}Max api usage (number of requests)\n{ANSII_RESET}")
         MAX_ACTIONS = int(MAX_ACTIONS)
 
-        print(f"{user_color}Task for ai:{ANSII_RESET}")
+        print_s(f"{user_color}Task for ai:{ANSII_RESET}")
         user_input = user_prompt()
 
         auto_prompt = f"""
@@ -246,14 +234,47 @@ though try to avoid bothering the user until it's important.
         """
         user_input = auto_prompt
 
+    elif user_input.strip() == "summarize":
+        print_s()
+        print_s(f"{assistant_color}SUMMARIZING A DIRECTORY!{ANSII_RESET}\n")
+        print_s(f"{model_color}Directories{ANSII_RESET}")
+        c = 'b'
+        directories = []
+        while c != "":
+            c = input("Enter a directory path to summarize. Hit enter again to finish (by default the current directory is used)\n")
+            if c != "":
+                directories.append(c)
+            print_s("\033[A\033[2K" * 2, end="", flush=True)
+            print_s(c)
+        print_s()
+        if len(directories) == 0:
+            directories = [os.getcwd()]
+
+        print_s(f"{model_color}Exclude{ANSII_RESET}")
+        c = 'b'
+        exclude = []
+        while c != "":
+            c = input("Enter a directory path to EXCLUDE. Hit enter again to finish (by default .git in the current directory is excluded)\n")
+            if c != "":
+                exclude.append(c)
+            print_s("\033[A\033[2K" * 2, end="", flush=True)
+            print_s(c)
+        print_s()
+        if len(exclude) == 0:
+            exclude = [".git"]
+        
+        summarize_repo(directories, exclude)
+        user_input = ''
+
     elif user_input.strip() == "help":
-        print(model_color)
-        print("Help:")
-        print("- auto (give the ai a task or list of tasks and tell it to complete them before it responds again. The ai will be constrained to the current directory or the directory specified with --dir)")
-        print("- vim (open vim for editing your response. Remember to quit with 'ESC + :wq'!)")
-        print("- quit or q (quit chat)")
-        print("- save (save your conversation to a file)")
-        print(ANSII_RESET)
+        print_s(model_color)
+        print_s("Help:")
+        print_s("- auto (give the ai a task or list of tasks and tell it to complete them before it responds again. The ai will be constrained to the current directory or the directory specified with --dir)")
+        print_s("- vim (open vim for editing your response. Remember to quit with 'ESC + :wq'!)")
+        print_s("- quit or q (quit chat)")
+        print_s("- save (save your conversation to a file)")
+        print_s("- summarize (have the assistant read through a repo and summarize it for you)")
+        print_s(ANSII_RESET)
 
         user_input = ''
 
@@ -289,6 +310,80 @@ def is_command_in_directory(command: str) -> bool:
             return False
     
     return True
+
+def summarize_repo(directories: list[str], exclude: list[str]):
+    MAX_FILE_SIZE_BYTES = 500 * 1000
+
+    all_files = []
+    for directory in directories:
+        directory_path = Path(directory).resolve()
+        files = [p for p in directory_path.rglob("*") if p.is_file()]
+        for f in files:
+            is_excluded = False
+            for exclude_dir_path in exclude:
+                exlude_dir = Path(exclude_dir_path).resolve()
+                if exlude_dir in f.parents or f == exlude_dir:
+                    is_excluded = True
+                    break
+            
+            if not is_excluded:
+                all_files.append(f)
+
+    prompt = """
+The user has requested you help them summarize and understand the repo they're working in. 
+We'll provide you files, one by one and ask you to summarize them. We'll record your summaries
+in a note sheet which we'll return to you when we've finished. You can then provide the user with a 
+summary of the repo and start helping them with their questions.
+    """
+    input_to_model = [
+        {
+            "content": prompt,
+            "role": SYSTEM,
+        }
+    ]
+    call_api(input_to_model, include_functions=False)
+
+    notes = []
+    for file in all_files:
+        size = file.stat().st_size
+        contents = None
+        if size > MAX_FILE_SIZE_BYTES:
+            print_s(f"{model_color}exceeded max file size: {file} > {MAX_FILE_SIZE_BYTES/1000.0}KB - {ANSII_RESET}")
+            contents = "EXCEEDED MAX FILE SIZE"
+        else:
+            print_s(f"{model_color}reading: {file} - {ANSII_RESET}")
+            contents = file.read_text()
+
+
+        prompt = f"```{file}\n{contents}\n```\nReturn a one line summary of this file"
+        input_to_model = [
+            {
+                "content": prompt,
+                "role": SYSTEM,
+            }
+        ]
+        outputs, error = call_api(input_to_model, include_functions=False)
+        output = outputs[0]
+        ai_summary = output['content'][0]['text'].replace("\n", " ")
+        print_s(f" - {ai_summary}")
+        notes.append(f"{file} - {ai_summary}")
+
+    note_file = "\n".join(notes)
+    prompt = f"{note_file} \n\n Now summarize the repo for the user"
+    input_to_model = [
+        {
+            "content": prompt,
+            "role": SYSTEM,
+        }
+    ]
+    outputs, error = call_api(input_to_model, include_functions=False)
+    message = None
+    if error:
+        message = outputs
+    else:
+        message = outputs[0]['content'][0]['text']
+    print_and_save_ai_message_to_history(message, error)
+
 
 class TalkProcess:
 
@@ -336,7 +431,6 @@ class TalkProcess:
     def is_finished(self):
         return self._process != None and self._process.poll() != None
 
-
 tools = [
     {
         "type": "function",
@@ -350,7 +444,7 @@ tools = [
                     "description": "What you want to say to the user now that you're done"
                 }
             },
-            "required": ["path"]
+            "required": ["text"]
         }
     },
     {
@@ -365,7 +459,7 @@ tools = [
                     "description": "Command string with args"
                 }
             },
-            "required": ["path"]
+            "required": ["command"]
         }
     },
     {
@@ -385,7 +479,7 @@ tools = [
                     "description": "input to be sent to currently running command"
                 }
             },
-            "required": ["path"]
+            "required": ["input"]
         }
     },
     {
@@ -457,9 +551,30 @@ tools = [
         "name": "get_user_instructions",
         "description": "Sometimes the user will give you a prompt and will ask you to finish it before sending a normal message. During that time you can call this to get their original instructions"
     },
+    {
+        "type": "function",
+        "name": "add_to_notes",
+        "description": "If you would like to write something down to remember, you can do so with this function. It can later be recalled with the 'get_notes' function. This will replace the contents of your notes",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "note": {
+                    "type": "string",
+                    "description": "The note you'd like to write down"
+                }
+            },
+            "required": ["note"]
+        }
+    },
+    {
+        "type": "function",
+        "name": "get_notes",
+        "description": "Returns notes you may have previously written with the 'add_to_notes' function"
+    },
 ]
+notes = ""
 def handle_function_call(name, args, call_id, input_to_model):
-    global NO_QUESTIONS_IN_AUTO_MODE
+    global NO_QUESTIONS_IN_AUTO_MODE, notes
 
     # handle each command
     if name == 'done':
@@ -488,8 +603,8 @@ def handle_function_call(name, args, call_id, input_to_model):
         cmd = f"ls -la {path}"
         p_result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
         result = f'{p_result.stdout}\n{p_result.stderr}'
-        sys.stdout.write(f"{output_color}{result}{ANSII_RESET}")
-        sys.stdout.write("\r\n\r\n")
+        print_s(f"{output_color}{result}{ANSII_RESET}")
+        print_s()
         input_to_model.append(
             {
                 "type": "function_call_output",
@@ -501,8 +616,8 @@ def handle_function_call(name, args, call_id, input_to_model):
         path = convert_to_directory_path(args['path'])
         p_result = subprocess.run(f"cat {path}", shell=True, capture_output=True, text=True)
         result = f'{p_result.stdout}\n{p_result.stderr}'
-        sys.stdout.write(f"{output_color}{result}{ANSII_RESET}")
-        sys.stdout.write("\r\n\r\n")
+        print_s(f"{output_color}{result}{ANSII_RESET}")
+        print_s()
         input_to_model.append(
             {
                 "type": "function_call_output",
@@ -522,8 +637,8 @@ write to file {args["path"]}
 {args["contents"]}
 ```
         """
-        sys.stdout.write(f"{output_color}{result}{ANSII_RESET}")
-        sys.stdout.write("\r\n\r\n")
+        print_s(f"{output_color}{result}{ANSII_RESET}")
+        print_s()
         input_to_model.append(
             {
                 "type": "function_call_output",
@@ -539,8 +654,8 @@ write to file {args["path"]}
         elif p.is_dir():
             shutil.rmtree(p)
         result = f"deleted {path}"
-        sys.stdout.write(f"{output_color}{result}{ANSII_RESET}")
-        sys.stdout.write("\r\n\r\n")
+        print_s(f"{output_color}{result}{ANSII_RESET}")
+        print_s()
         input_to_model.append(
             {
                 "type": "function_call_output",
@@ -556,10 +671,29 @@ write to file {args["path"]}
                 "output": auto_prompt
             }
         )
+    elif name == "add_to_notes":
+        notes = args["note"]
+        print_s(f"{output_color}{notes}{ANSII_RESET}")
+        print_s()
+        input_to_model.append(
+            {
+                "type": "function_call_output",
+                "call_id": call_id,
+                "output": notes
+            }
+        )
+    elif name == "get_notes":
+        input_to_model.append(
+            {
+                "type": "function_call_output",
+                "call_id": call_id,
+                "output": notes
+            }
+        )
     else:
         result = "That's not a command or doesn't make sense in this context"
-        sys.stdout.write(f"{output_color}{result}{ANSII_RESET}")
-        sys.stdout.write("\r\n\r\n")
+        print_s(f"{output_color}{result}{ANSII_RESET}")
+        print_s()
         input_to_model.append(
             {
                 "type": "function_call_output",
@@ -578,7 +712,7 @@ def input_function_loop(command, call_id, input_to_model):
     if is_command_in_directory(command):
         process = TalkProcess(command, AUTO_DIRECTORY)
         output = process.get_output()
-        sys.stdout.write(f"{output_color}{output}{ANSII_RESET}\n")
+        print_s(f"{output_color}{output}{ANSII_RESET}\n")
     else:
         output = f"invalid command, working outside designated directory '{AUTO_DIRECTORY}'. Stick to relative paths"
  
@@ -600,7 +734,7 @@ def input_function_loop(command, call_id, input_to_model):
         if process.is_finished(): break
 
         # otherwise send output to model
-        outputs, error = ai_auto_mode_prompt(input_to_model)
+        outputs, error = call_api(input_to_model)
         input_to_model.clear()
 
         # handle ai response
@@ -611,7 +745,7 @@ def input_function_loop(command, call_id, input_to_model):
 
                     name = output['name']
                     call_id = output['call_id']
-                    sys.stdout.write(f"{model_color}{name} {output['arguments']} {call_id}{ANSII_RESET}\n")
+                    print_s(f"{model_color}{name} {output['arguments']} {call_id}{ANSII_RESET}\n")
                     if name == "command_input":
                         args = {}
                         if 'arguments' in output:
@@ -620,11 +754,11 @@ def input_function_loop(command, call_id, input_to_model):
 
                         # send ai input
                         process.send_input(ai_input)
-                        sys.stdout.write(f"{model_color}{ai_input}{ANSII_RESET}\n")
+                        print_s(f"{model_color}{ai_input}{ANSII_RESET}\n")
 
                         # add process output to response for ai
                         output = process.get_output()
-                        sys.stdout.write(f"{output_color}{output}{ANSII_RESET}\n")
+                        print_s(f"{output_color}{output}{ANSII_RESET}\n")
                         input_to_model.append(
                             {
                                 "type": "function_call_output",
@@ -650,7 +784,7 @@ def input_function_loop(command, call_id, input_to_model):
                                 "output": "Right now you have a command running. If you want run another function, use 'command_input' or 'kill_command' functions to finish first."
                             }
                         )
-                        print(f"{error_color}rejected attempt to run command while other command is running{ANSII_RESET}")
+                        print_s(f"{error_color}rejected attempt to run command while other command is running{ANSII_RESET}")
 
                 else:
                     msg = "Right now you have a command running and it's waiting for your input. Use 'command_input' or 'kill_command' functions before sending the user a message."
@@ -660,7 +794,7 @@ def input_function_loop(command, call_id, input_to_model):
                             "role": SYSTEM,
                         }
                     )
-                    print(f"{error_color}rejected message since ai is running a command currently{ANSII_RESET}")
+                    print_s(f"{error_color}rejected message since ai is running a command currently{ANSII_RESET}")
             
             if kill:
                 process.kill()
@@ -676,18 +810,27 @@ def input_function_loop(command, call_id, input_to_model):
     if not process.is_finished(): process.kill()
     return input_to_model
 
-def ai_auto_mode_prompt(model_input):
+def call_api(model_input, include_functions=True):
     global request_done
     time_elapsed_displayer = threading.Thread(target=loading_indicator)
     time_elapsed_displayer.start()
 
-    body = json.dumps({
-        "conversation": CONVERSATION_ID,
-        "model": MODEL,
-        "input": model_input,
-        "tools": tools,
-        "tool_choice": "auto"
-    })
+    body = None
+    if include_functions:
+        body = json.dumps({
+            "conversation": CONVERSATION_ID,
+            "model": MODEL,
+            "input": model_input,
+            "tools": tools,
+            "tool_choice": "auto"
+        })
+    else:
+        body = json.dumps({
+            "conversation": CONVERSATION_ID,
+            "model": MODEL,
+            "input": model_input
+        })
+
 
     conn = http.client.HTTPSConnection("api.openai.com")
     conn.request(
@@ -733,7 +876,7 @@ def auto_mode_loop(max_attempts=100):
     while not stop.is_set() and i < max_attempts:
 
         # prompt ai and handle response
-        outputs, error = ai_auto_mode_prompt(input_to_model)
+        outputs, error = call_api(input_to_model)
         input_to_model = []
         if not error:
 
@@ -745,7 +888,7 @@ def auto_mode_loop(max_attempts=100):
                 type = output['type']
                 if type == "message":
                     if NO_QUESTIONS_IN_AUTO_MODE:
-                        print(f"{error_color}rejected message since prompt has not been completed{ANSII_RESET}")
+                        print_s(f"{error_color}rejected message since prompt has not been completed{ANSII_RESET}")
                         input_to_model.append(
                             {
                                 "content": "The user has asked you complete this prompt without asking questions. Just complete the prompt with your best guess on the users' intentions and call the 'done' function when finished.",
@@ -768,8 +911,8 @@ def auto_mode_loop(max_attempts=100):
                     if 'arguments' in output:
                         args = json.loads(output['arguments'])
                     call_id = output['call_id']
-                    sys.stdout.write(f"{model_color}{name} {output['arguments']} {call_id}{ANSII_RESET}")
-                    sys.stdout.write("\r\n\r\n")
+                    print_s(f"{model_color}{name} {output['arguments']} {call_id}{ANSII_RESET}")
+                    print_s()
                     input_to_model = handle_function_call(name, args, call_id, input_to_model)
         else:
             message = outputs
@@ -783,18 +926,17 @@ def auto_mode_loop(max_attempts=100):
 
 
     if i == max_attempts:
-        print(user_color + f'Ai helper paused after hitting max attempts of {max_attempts}, continue current auto mode setup with new prompt? (y/n)' + ANSII_RESET)
-        print()
+        print_s(user_color + f'Ai helper paused after hitting max attempts of {max_attempts}, continue current auto mode setup with new prompt? (y/n)' + ANSII_RESET)
+        print_s()
         user_input = user_prompt()
-        print()
-        print()
+        print_s()
+        print_s()
 
         if user_input.lower() == "y":
             auto_mode_loop()
 
 
-# MAIN CODE
-history = []
+# START
 
 # start a conversation
 conn = http.client.HTTPSConnection("api.openai.com")
