@@ -12,9 +12,16 @@
             "console": "integratedTerminal",
             "args" :[
                 "-k", "",
-                "--cmd", "python3 auto_mode_test/main.py",
                 "--dir", "auto_mode_test",
-                "--auto"
+            ]
+        },
+        {
+            "name": "Test",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "test.py",
+            "console": "integratedTerminal",
+            "args" :[
             ]
         }
     ]
