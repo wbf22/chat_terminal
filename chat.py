@@ -344,15 +344,24 @@ summary of the repo and start helping them with their questions.
     call_api(input_to_model, include_functions=False)
 
     notes = []
+    i = 0
     for file in all_files:
+        i+=1
         size = file.stat().st_size
         contents = None
         if size > MAX_FILE_SIZE_BYTES:
-            print_s(f"{model_color}exceeded max file size: {file} > {MAX_FILE_SIZE_BYTES/1000.0}KB - {ANSII_RESET}")
+            print_s(f"{i}/{len(all_files)} {model_color}exceeded max file size: {file} > {MAX_FILE_SIZE_BYTES/1000.0}KB - {ANSII_RESET}")
             contents = "EXCEEDED MAX FILE SIZE"
         else:
-            print_s(f"{model_color}reading: {file} - {ANSII_RESET}")
-            contents = file.read_text()
+            print_s(f"{i}/{len(all_files)} {model_color}reading: {file} - {ANSII_RESET}")
+            try:
+                contents = file.read_text()
+            except FileNotFoundError:
+                print(f"File not found: {file}")
+            except PermissionError:
+                print(f"Permission denied: {file}")
+            except Exception as e:
+                print(f"Unexpected error: {e}")
 
 
         prompt = f"```{file}\n{contents}\n```\nReturn a one line summary of this file"
@@ -363,10 +372,20 @@ summary of the repo and start helping them with their questions.
             }
         ]
         outputs, error = call_api(input_to_model, include_functions=False)
+        ai_summary = None
+        tries = 0
+        while error and tries < 2:
+            ai_summary = outputs
+            time.sleep(30)
+            tries += 1
+
         output = outputs[0]
         ai_summary = output['content'][0]['text'].replace("\n", " ")
         print_s(f" - {ai_summary}")
         notes.append(f"{file} - {ai_summary}")
+
+        time.sleep(4)
+        
 
     note_file = "\n".join(notes)
     prompt = f"{note_file} \n\n Now summarize the repo for the user"
