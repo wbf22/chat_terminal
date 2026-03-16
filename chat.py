@@ -22,11 +22,16 @@ import tty
 from typing import Optional
 
 
+OPEN_AI = 'open_ai'
+ANTHROPIC = 'anthropic'
+
 # define arguments
 parser = argparse.ArgumentParser(description="A terminal app for accessing chat gpt")
-parser.add_argument('-k', '--api_key', required=True, help='Your open-api key created at https://platform.openai.com/api-keys')
+parser.add_argument('-ok', '--open_ai_api_key', help='Your open-api key created at https://platform.openai.com/api-keys')
+parser.add_argument('-ak', '--anthropic_api_key', required=True, help='Your anthropic api key created at https://platform.claude.com/settings/keys')
 parser.add_argument('-t', '--tokens', type=int, default=4096, help="Max tokens chat will respond with")
 parser.add_argument('-m', '--model', help='The api model you\'ll access. View models here https://platform.openai.com/docs/models', default='gpt-4.1-nano')
+parser.add_argument('-a', '--api', default=OPEN_AI, help=f'Which api your model name is from. Currenlty only \'{OPEN_AI}\' and \'{ANTHROPIC}\' are supported.')
 parser.add_argument('-T', '--temperature', type=float, default=0.4,  help='Higher values like 0.8 will make the output more random, while lower values like 0.2 will make it more focused and deterministic. Range 0-2')
 
 parser.add_argument('-d', '--dir', help='The working directory where the model can run commands in auto mode')
@@ -58,7 +63,8 @@ args = parser.parse_args()
 
 MODEL = args.model
 TOKENS = args.tokens
-API_KEY = args.api_key
+OPEN_AI_API_KEY = args.open_ai_api_key
+ANTHROPIC_API_KEY = args.anthropic_api_key
 TEMPERATURE = args.temperature
 
 
@@ -93,6 +99,7 @@ SYSTEM = 'system'
 AUTO_DIRECTORY = os.getcwd() if args.dir == None else args.dir
 NO_QUESTIONS_IN_AUTO_MODE = False
 MAX_ACTIONS = 100
+API = args.api
 
 
 
@@ -153,6 +160,8 @@ def print_s(
     history.append(sep.join(strip_ansi(str(v)) for v in values) + (end or ""))
     print(*values, sep=sep, end=end, flush=flush, file=file)
 
+
+
 USER_TAG = 'YOU: (type help for special commands)'
 def print_and_save_user_input_to_history():
 
@@ -173,6 +182,16 @@ def write_history(history):
         file.write("\n")
 
 auto_prompt = ""
+models = """
+- gpt-5.4-2026-03-05
+- gpt-5-mini-2025-08-07
+- gpt-5-nano-2025-08-07
+- claude-opus-4-6
+- claude-sonnet-4-6
+- claude-haiku-4-5-20251001
+- (or enter specific model name)
+Docs: https://developers.openai.com/api/docs/models/all, https://platform.claude.com/docs/en/about-claude/pricing
+"""
 def user_prompt():
     global auto_prompt
     
@@ -233,7 +252,6 @@ Sometimes you can send a regular message to ask them for clarification on the pr
 though try to avoid bothering the user until it's important.
         """
         user_input = auto_prompt
-
     elif user_input.strip() == "summarize":
         print_s()
         print_s(f"{assistant_color}SUMMARIZING A DIRECTORY!{ANSII_RESET}\n")
@@ -265,7 +283,23 @@ though try to avoid bothering the user until it's important.
         
         summarize_repo(directories, exclude)
         user_input = ''
+    elif user_input.strip() == "model":
+        print_s()
+        print_s(f"{assistant_color}CHANGE MODEL{ANSII_RESET}\n")
+        print_s(f"{model_color}api:\n[0] {OPEN_AI} (chatgpt)\n[1] {ANTHROPIC} (cluade)\n{ANSII_RESET}")
+        api = input()
+        if api == "1":
+            API = ANTHROPIC
+        else:
+            API = OPEN_AI
 
+        print_s()
+        print_s(f"{assistant_color}model name:\n{models}\n{ANSII_RESET}\n")
+        MODEL = input()
+
+        print_s(f"{assistant_color}using {MODEL} on {API}{ANSII_RESET}\n")
+
+        define_model_functions()
     elif user_input.strip() == "help":
         print_s(model_color)
         print_s("Help:")
@@ -274,6 +308,7 @@ though try to avoid bothering the user until it's important.
         print_s("- quit or q (quit chat)")
         print_s("- save (save your conversation to a file)")
         print_s("- summarize (have the assistant read through a repo and summarize it for you)")
+        print_s("- model (switch model being used)")
         print_s(ANSII_RESET)
 
         user_input = ''
@@ -380,7 +415,7 @@ summary of the repo and start helping them with their questions.
             tries += 1
 
         output = outputs[0]
-        ai_summary = output['content'][0]['text'].replace("\n", " ")
+        ai_summary = output[0]['text'].replace("\n", " ")
         print_s(f" - {ai_summary}")
         notes.append(f"{file} - {ai_summary}")
 
@@ -450,149 +485,153 @@ class TalkProcess:
     def is_finished(self):
         return self._process != None and self._process.poll() != None
 
-tools = [
-    {
-        "type": "function",
-        "name": "done",
-        "description": "Used to indicate you've complete the users prompt and are awaiting further instructions",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "text": {
-                    "type": "string",
-                    "description": "What you want to say to the user now that you're done"
-                }
-            },
-            "required": ["text"]
-        }
-    },
-    {
-        "type": "function",
-        "name": "run_command",
-        "description": "Run a command in the directory",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "command": {
-                    "type": "string",
-                    "description": "Command string with args"
-                }
-            },
-            "required": ["command"]
-        }
-    },
-    {
-        "type": "function",
-        "name": "kill_command",
-        "description": "Kill a command/process that is running"
-    },
-    {
-        "type": "function",
-        "name": "command_input",
-        "description": "Send input to a currently running command/process",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "input": {
-                    "type": "string",
-                    "description": "input to be sent to currently running command"
-                }
-            },
-            "required": ["input"]
-        }
-    },
-    {
-        "type": "function",
-        "name": "ls",
-        "description": "List the files in a directory",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "path": {
-                    "type": "string",
-                    "description": "Path to the directory, e.g. /home/user/documents"
-                }
-            },
-            "required": ["path"]
-        }
-    },
-    {
-        "type": "function",
-        "name": "cat",
-        "description": "Get the current contents of a file",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "path": {
-                    "type": "string",
-                    "description": "Path to the file, e.g. /home/user/documents/myfile.txt"
-                }
-            },
-            "required": ["path"]
-        }
-    },
-    {
-        "type": "function",
-        "name": "write_file",
-        "description": "Set the contents of a file",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "path": {
-                    "type": "string",
-                    "description": "Path to the file, e.g. /home/user/documents/myfile.txt"
+tools = []
+def define_model_functions():
+    global tools
+    
+    params_name = 'parameters' if API == OPEN_AI else 'input_schema'
+
+    tools = [
+        {
+            "name": "done",
+            "description": "Used to indicate you've complete the users prompt and are awaiting further instructions",
+            params_name: {
+                "type": "object",
+                "properties": {
+                    "text": {
+                        "type": "string",
+                        "description": "What you want to say to the user now that you're done"
+                    }
                 },
-                "contents": {
-                    "type": "string",
-                    "description": "The data that will replace the contents of the file"
-                }
-            },
-            "required": ["path", "contents"]
-        }
-    },
-    {
-        "type": "function",
-        "name": "delete",
-        "description": "Delete a file or folder (with it's contents)",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "path": {
-                    "type": "string",
-                    "description": "Path to the directory, e.g. /home/user/documents"
-                }
-            },
-            "required": ["path"]
-        }
-    },
-    {
-        "type": "function",
-        "name": "get_user_instructions",
-        "description": "Sometimes the user will give you a prompt and will ask you to finish it before sending a normal message. During that time you can call this to get their original instructions"
-    },
-    {
-        "type": "function",
-        "name": "add_to_notes",
-        "description": "If you would like to write something down to remember, you can do so with this function. It can later be recalled with the 'get_notes' function. This will replace the contents of your notes",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "note": {
-                    "type": "string",
-                    "description": "The note you'd like to write down"
-                }
-            },
-            "required": ["note"]
-        }
-    },
-    {
-        "type": "function",
-        "name": "get_notes",
-        "description": "Returns notes you may have previously written with the 'add_to_notes' function"
-    },
-]
+                "required": ["text"]
+            }
+        },
+        {
+            "name": "run_command",
+            "description": "Run a command in the directory",
+            params_name: {
+                "type": "object",
+                "properties": {
+                    "command": {
+                        "type": "string",
+                        "description": "Command string with args"
+                    }
+                },
+                "required": ["command"]
+            }
+        },
+        {
+            "name": "kill_command",
+            "description": "Kill a command/process that is running",
+            params_name: { "type": "object", "properties": {}}
+        },
+        {
+            "name": "command_input",
+            "description": "Send input to a currently running command/process",
+            params_name: {
+                "type": "object",
+                "properties": {
+                    "input": {
+                        "type": "string",
+                        "description": "input to be sent to currently running command"
+                    }
+                },
+                "required": ["input"]
+            }
+        },
+        {
+            "name": "ls",
+            "description": "List the files in a directory",
+            params_name: {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Path to the directory, e.g. /home/user/documents"
+                    }
+                },
+                "required": ["path"]
+            }
+        },
+        {
+            "name": "cat",
+            "description": "Get the current contents of a file",
+            params_name: {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Path to the file, e.g. /home/user/documents/myfile.txt"
+                    }
+                },
+                "required": ["path"]
+            }
+        },
+        {
+            "name": "write_file",
+            "description": "Set the contents of a file",
+            params_name: {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Path to the file, e.g. /home/user/documents/myfile.txt"
+                    },
+                    "contents": {
+                        "type": "string",
+                        "description": "The data that will replace the contents of the file"
+                    }
+                },
+                "required": ["path", "contents"]
+            }
+        },
+        {
+            "name": "delete",
+            "description": "Delete a file or folder (with it's contents)",
+            params_name: {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Path to the directory, e.g. /home/user/documents"
+                    }
+                },
+                "required": ["path"]
+            }
+        },
+        {
+            "name": "get_user_instructions",
+            "description": "Sometimes the user will give you a prompt and will ask you to finish it before sending a normal message. During that time you can call this to get their original instructions",
+            params_name: { "type": "object", "properties": {}}
+        },
+        {
+            "name": "add_to_notes",
+            "description": "If you would like to write something down to remember, you can do so with this function. It can later be recalled with the 'get_notes' function. This will replace the contents of your notes",
+            params_name: {
+                "type": "object",
+                "properties": {
+                    "note": {
+                        "type": "string",
+                        "description": "The note you'd like to write down"
+                    }
+                },
+                "required": ["note"]
+            }
+        },
+        {
+            "name": "get_notes",
+            "description": "Returns notes you may have previously written with the 'add_to_notes' function",
+            params_name: { "type": "object", "properties": {}}
+        },
+    ]
+
+    if API == OPEN_AI:
+        for tool in tools:
+            tool['type'] = 'function'
+
+
 notes = ""
-def handle_function_call(name, args, call_id, input_to_model):
+def handle_function_call(name, args, tool_use_id, input_to_model):
     global NO_QUESTIONS_IN_AUTO_MODE, notes
 
     # handle each command
@@ -600,7 +639,7 @@ def handle_function_call(name, args, call_id, input_to_model):
         input_to_model.append(
             {
                 "type": "function_call_output",
-                "call_id": call_id,
+                "tool_use_id": tool_use_id,
                 "output": "prompt has been marked as completed. You can now ask the user questions"
             }
         )
@@ -616,7 +655,7 @@ def handle_function_call(name, args, call_id, input_to_model):
 
     elif name == "run_command":
         command = args['command']
-        input_to_model = input_function_loop(command, call_id, input_to_model)
+        input_to_model = input_function_loop(command, tool_use_id, input_to_model)
     elif name == "ls":
         path = convert_to_directory_path(args['path'])
         cmd = f"ls -la {path}"
@@ -627,7 +666,7 @@ def handle_function_call(name, args, call_id, input_to_model):
         input_to_model.append(
             {
                 "type": "function_call_output",
-                "call_id": call_id,
+                "tool_use_id": tool_use_id,
                 "output": result
             }
         )
@@ -640,7 +679,7 @@ def handle_function_call(name, args, call_id, input_to_model):
         input_to_model.append(
             {
                 "type": "function_call_output",
-                "call_id": call_id,
+                "tool_use_id": tool_use_id,
                 "output": result
             }
         )
@@ -661,7 +700,7 @@ write to file {args["path"]}
         input_to_model.append(
             {
                 "type": "function_call_output",
-                "call_id": call_id,
+                "tool_use_id": tool_use_id,
                 "output": result
             }
         )
@@ -678,7 +717,7 @@ write to file {args["path"]}
         input_to_model.append(
             {
                 "type": "function_call_output",
-                "call_id": call_id,
+                "tool_use_id": tool_use_id,
                 "output": result
             }
         )
@@ -686,7 +725,7 @@ write to file {args["path"]}
         input_to_model.append(
             {
                 "type": "function_call_output",
-                "call_id": call_id,
+                "tool_use_id": tool_use_id,
                 "output": auto_prompt
             }
         )
@@ -697,7 +736,7 @@ write to file {args["path"]}
         input_to_model.append(
             {
                 "type": "function_call_output",
-                "call_id": call_id,
+                "tool_use_id": tool_use_id,
                 "output": notes
             }
         )
@@ -705,7 +744,7 @@ write to file {args["path"]}
         input_to_model.append(
             {
                 "type": "function_call_output",
-                "call_id": call_id,
+                "tool_use_id": tool_use_id,
                 "output": notes
             }
         )
@@ -716,14 +755,14 @@ write to file {args["path"]}
         input_to_model.append(
             {
                 "type": "function_call_output",
-                "call_id": call_id,
+                "tool_use_id": tool_use_id,
                 "output": result
             }
         )
 
     return input_to_model
 
-def input_function_loop(command, call_id, input_to_model):
+def input_function_loop(command, tool_use_id, input_to_model):
     
     # start process
     process = None
@@ -738,7 +777,7 @@ def input_function_loop(command, call_id, input_to_model):
     input_to_model.append(
         {
             "type": "function_call_output",
-            "call_id": call_id,
+            "tool_use_id": tool_use_id,
             "output": output
         }
     )
@@ -763,8 +802,8 @@ def input_function_loop(command, call_id, input_to_model):
                 if type == "function_call":
 
                     name = output['name']
-                    call_id = output['call_id']
-                    print_s(f"{model_color}{name} {output['arguments']} {call_id}{ANSII_RESET}\n")
+                    tool_use_id = output['tool_use_id']
+                    print_s(f"{model_color}{name} {output['arguments']} {tool_use_id}{ANSII_RESET}\n")
                     if name == "command_input":
                         args = {}
                         if 'arguments' in output:
@@ -781,7 +820,7 @@ def input_function_loop(command, call_id, input_to_model):
                         input_to_model.append(
                             {
                                 "type": "function_call_output",
-                                "call_id": call_id,
+                                "tool_use_id": tool_use_id,
                                 "output": output
                             }
                         )
@@ -791,7 +830,7 @@ def input_function_loop(command, call_id, input_to_model):
                         input_to_model.append(
                             {
                                 "type": "function_call_output",
-                                "call_id": call_id,
+                                "tool_use_id": tool_use_id,
                                 "output": "Process was killed"
                             }
                         )
@@ -799,7 +838,7 @@ def input_function_loop(command, call_id, input_to_model):
                         input_to_model.append(
                             {
                                 "type": "function_call_output",
-                                "call_id": call_id,
+                                "tool_use_id": tool_use_id,
                                 "output": "Right now you have a command running. If you want run another function, use 'command_input' or 'kill_command' functions to finish first."
                             }
                         )
@@ -829,53 +868,142 @@ def input_function_loop(command, call_id, input_to_model):
     if not process.is_finished(): process.kill()
     return input_to_model
 
-def call_api(model_input, include_functions=True):
+conversation_summary = ''
+def update_conversation_summary(last_input_to_model):
+    global conversation_summary
+
+    output, error = call_api(last_input_to_model, include_functions=False, updating_summary=True)
+    if not error:
+        conversation_summary = output[0]['text']
+    
+
+def call_api(model_input, include_functions=True, updating_summary=False):
     global request_done
     time_elapsed_displayer = threading.Thread(target=loading_indicator)
     time_elapsed_displayer.start()
 
-    body = None
-    if include_functions:
-        body = json.dumps({
-            "conversation": CONVERSATION_ID,
-            "model": MODEL,
-            "input": model_input,
-            "tools": tools,
-            "tool_choice": "auto"
-        })
-    else:
-        body = json.dumps({
-            "conversation": CONVERSATION_ID,
-            "model": MODEL,
-            "input": model_input
-        })
 
-
-    conn = http.client.HTTPSConnection("api.openai.com")
-    conn.request(
-        "POST", 
-        "/v1/responses", 
-        body=body, 
-        headers={
-            'Content-Type': 'application/json',
-            'Authorization': 'Bearer ' + API_KEY
+    
+    # add conversation history
+    if model_input[0]["content"].startswith("CONVERSATION HISTORY SUMMARY:"):
+        model_input[0] = {
+            "role" : SYSTEM if API == OPEN_AI else USER,
+            "content": f"CONVERSATION HISTORY SUMMARY:\n{conversation_summary}"
         }
-    )
+    else:
+        model_input.insert(
+            0, 
+            {
+                "role" : SYSTEM if API == OPEN_AI else USER,
+                "content": f"CONVERSATION HISTORY SUMMARY:\n{conversation_summary}"
+            }
+        )
+
+    # add summarizing instructions if doing summary
+    if updating_summary:
+        model_input.append(
+            {
+                "role" : SYSTEM if API == OPEN_AI else USER,
+                "content": "Please return a summary of the conversation up to this point for your future reference, making sure to remember important details"
+            }
+        )
+
+
+    conn = None
+    body = None
+    if API == OPEN_AI:
+
+        if include_functions:
+            body = json.dumps({
+                "model": MODEL,
+                "input": model_input,
+                "tools": tools,
+                "tool_choice": "auto" if API == OPEN_AI else {"type":"auto"}
+            })
+        else:
+            body = json.dumps({
+                "model": MODEL,
+                "input": model_input
+            })
+
+        conn = http.client.HTTPSConnection("api.openai.com")
+        conn.request(
+            "POST", 
+            "/v1/responses", 
+            body=body, 
+            headers={
+                'Content-Type': 'application/json',
+                'Authorization': 'Bearer ' + OPEN_AI_API_KEY
+            }
+        )
+    else:
+        if include_functions:
+            body = json.dumps({
+                "model": MODEL,
+                "max_tokens": 1024,
+                "messages": model_input,
+                "tools": tools,
+                "tool_choice": "auto" if API == OPEN_AI else {"type":"auto"}
+            })
+        else:
+            body = json.dumps({
+                "model": MODEL,
+                "max_tokens": 1024,
+                "messages": model_input
+            })
+        conn = http.client.HTTPSConnection("api.anthropic.com")
+        conn.request(
+            "POST", 
+            "/v1/messages", 
+            body=body, 
+            headers={
+                'Content-Type': 'application/json',
+                'X-Api-Key': ANTHROPIC_API_KEY,
+                'anthropic-version': '2023-06-01'
+            }
+        )
+        
     response = conn.getresponse()
     output = None
     error = False
     if response.status == 200:
         data = response.read()
         response_body = json.loads(data)
-        output = response_body['output']
+        if API == OPEN_AI:
+            output = []
+            for output_s in response_body['output']:
+                if output_s['type'] == 'message':
+                    output.append(
+                        {
+                            "type": "text",
+                            "role": output_s['role'],
+                            "text": output_s['text']
+                        }
+                    )
+                elif output_s['type'] == 'function_call':
+                    output.append(
+                        {
+                            "type": "tool_use",
+                            "id": output_s['call_id'],
+                            "name": output_s['name'],
+                            "input": json.loads(output_s['arguments'])
+                        }
+                    )
+        else:
+            output = response_body['content']
+            
     else:
         output = f"Error: {response.status} - {response.read().decode()}{ANSII_RESET}"
+        # print_s(output)
         error = True
     conn.close()
 
     request_done = True
     time_elapsed_displayer.join()
     request_done = False
+
+    if not updating_summary:
+        update_conversation_summary(model_input)
 
     return output, error
 
@@ -905,7 +1033,7 @@ def auto_mode_loop(max_attempts=100):
             # handle ai commands and messages
             for output in outputs:
                 type = output['type']
-                if type == "message":
+                if type == "text":
                     if NO_QUESTIONS_IN_AUTO_MODE:
                         print_s(f"{error_color}rejected message since prompt has not been completed{ANSII_RESET}")
                         input_to_model.append(
@@ -915,7 +1043,7 @@ def auto_mode_loop(max_attempts=100):
                             }
                         )
                     else:
-                        message = output['content'][0]['text']
+                        message = output[0]['text']
                         print_and_save_ai_message_to_history(message, False)
                         user_res = print_and_save_user_input_to_history()
                         input_to_model.append(
@@ -924,15 +1052,13 @@ def auto_mode_loop(max_attempts=100):
                                 "role": USER,
                             }
                         )
-                elif type == "function_call":
+                elif type == "tool_use":
                     name = output['name']
-                    args = {}
-                    if 'arguments' in output:
-                        args = json.loads(output['arguments'])
-                    call_id = output['call_id']
-                    print_s(f"{model_color}{name} {output['arguments']} {call_id}{ANSII_RESET}")
+                    args = output['input']
+                    tool_use_id = output['id']
+                    print_s(f"{model_color}{name} {output['arguments']} {tool_use_id}{ANSII_RESET}")
                     print_s()
-                    input_to_model = handle_function_call(name, args, call_id, input_to_model)
+                    input_to_model = handle_function_call(name, args, tool_use_id, input_to_model)
         else:
             message = outputs
             print_and_save_ai_message_to_history(message, error)
@@ -956,22 +1082,7 @@ def auto_mode_loop(max_attempts=100):
 
 
 # START
-
-# start a conversation
-conn = http.client.HTTPSConnection("api.openai.com")
-conn.request(
-    "POST", 
-    "/v1/conversations",
-    headers={
-        'Content-Type': 'application/json',
-        'Authorization': 'Bearer ' + API_KEY
-    }
-)
-response = conn.getresponse()
-data = response.read()
-CONVERSATION_ID = json.loads(data)['id']
-conn.close()
-
+define_model_functions()
 while(True):
     
 
