@@ -278,12 +278,15 @@ def user_prompt():
             API = OPEN_AI
 
         print_s()
-        print_s(f"{assistant_color}model name:\n{models}\n{ANSII_RESET}\n")
+        print_s(f"{assistant_color}model name:\n{models}{ANSII_RESET}")
         MODEL = input()
 
+        print_s()
         print_s(f"{assistant_color}using {MODEL} on {API}{ANSII_RESET}\n")
 
         define_model_functions()
+
+        user_input = ''
     elif user_input.strip() == "help":
         print_s(model_color)
         print_s("Help:")
