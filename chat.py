@@ -111,8 +111,7 @@ def print_and_save_ai_message_to_history(ai_message, error):
     print_s(
         assistant_color + 'ASSISTANT' + ANSII_RESET, 
         '(', 
-        model_color + MODEL, 
-        temperature_color + str(TEMPERATURE) + ANSII_RESET,
+        model_color + MODEL + ANSII_RESET,
         ')'
     )
     print_s("\n")
@@ -726,7 +725,7 @@ def handle_function_call(name, args, tool_use_id, tool_use, input_to_model):
         command = command if command != None else ''
 
         command = convert_paths_in_command(command)
-        input_to_model = input_function_loop(command, tool_use_id, input_to_model)
+        input_to_model = input_function_loop(command, tool_use_id, tool_use, input_to_model)
     elif name == "ls":
         path = args.get('path')
         path = path if path != None else ''
