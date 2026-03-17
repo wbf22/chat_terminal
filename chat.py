@@ -193,7 +193,7 @@ models = """
 Docs: https://developers.openai.com/api/docs/models/all, https://platform.claude.com/docs/en/about-claude/pricing
 """
 def user_prompt():
-    global auto_prompt
+    global auto_prompt, NO_QUESTIONS_IN_AUTO_MODE
     
     user_input = input()
 
@@ -235,8 +235,8 @@ def user_prompt():
         NO_QUESTIONS_IN_AUTO_MODE = True
         print_s(f'{model_color}In auto mode! Your ai helper will iterate in this directory until it believes it has achieved the goal you provide it. Once started, the model will continue it achieves it\'s goal or hits the max attempts limit{ANSII_RESET}')
         print_s()
-        MAX_ACTIONS = input(f"{user_color}Max api usage (number of requests)\n{ANSII_RESET}")
-        MAX_ACTIONS = int(MAX_ACTIONS)
+        # MAX_ACTIONS = input(f"{user_color}Max api usage (number of requests)\n{ANSII_RESET}")
+        # MAX_ACTIONS = int(MAX_ACTIONS)
 
         print_s(f"{user_color}Task for ai:{ANSII_RESET}")
         user_input = user_prompt()
@@ -246,7 +246,8 @@ You're working in a loop to complete the following user prompt:
 {user_input}
 
 You can call the provided functions to run commands, explore your sandboxed directory, and create
-and edit files. Once done use the 'done' function to indicate you've finished
+and edit files. We'll handle paths as relative to your sandboxed directory.
+Once done use the 'done' function to indicate you've finished
 
 Sometimes you can send a regular message to ask them for clarification on the prompt, 
 though try to avoid bothering the user until it's important.
@@ -330,6 +331,18 @@ def convert_to_directory_path(path):
 
     return path
 
+def convert_paths_in_command(command):
+    # Matches unix/windows absolute paths and relative paths with extensions
+    path_pattern = r'(?:\/[\w.\-\/]+|[A-Za-z]:\\[\w.\-\\]+|\.{0,2}\/[\w.\-\/]+|\w[\w.\-]*\/[\w.\-\/]*)'
+
+    def replace_path(match):
+        path = match.group(0)
+        new_path = convert_to_directory_path(path)
+        return new_path
+
+    modified = re.sub(path_pattern, replace_path, command)
+    return modified
+
 def is_command_in_directory(command: str) -> bool:
     sandbox = Path(AUTO_DIRECTORY).resolve()
     
@@ -373,7 +386,7 @@ summary of the repo and start helping them with their questions.
     input_to_model = [
         {
             "content": prompt,
-            "role": SYSTEM,
+            "role": SYSTEM if API == OPEN_AI else USER,
         }
     ]
     call_api(input_to_model, include_functions=False)
@@ -403,7 +416,7 @@ summary of the repo and start helping them with their questions.
         input_to_model = [
             {
                 "content": prompt,
-                "role": SYSTEM,
+                "role": SYSTEM if API == OPEN_AI else USER,
             }
         ]
         outputs, error = call_api(input_to_model, include_functions=False)
@@ -427,7 +440,7 @@ summary of the repo and start helping them with their questions.
     input_to_model = [
         {
             "content": prompt,
-            "role": SYSTEM,
+            "role": SYSTEM if API == OPEN_AI else USER,
         }
     ]
     outputs, error = call_api(input_to_model, include_functions=False)
@@ -494,7 +507,7 @@ def define_model_functions():
     tools = [
         {
             "name": "done",
-            "description": "Used to indicate you've complete the users prompt and are awaiting further instructions",
+            "description": "Sometimes the user may indicate they want you to complete a task without asking questions such as building and testing a program. Use this command to indicate you have finished a task like that. Not necessary for normal back and forth conversation.",
             params_name: {
                 "type": "object",
                 "properties": {
@@ -547,7 +560,7 @@ def define_model_functions():
                 "properties": {
                     "path": {
                         "type": "string",
-                        "description": "Path to the directory, e.g. /home/user/documents"
+                        "description": "Path to the directory, e.g. /myfolder"
                     }
                 },
                 "required": ["path"]
@@ -561,7 +574,7 @@ def define_model_functions():
                 "properties": {
                     "path": {
                         "type": "string",
-                        "description": "Path to the file, e.g. /home/user/documents/myfile.txt"
+                        "description": "Path to the file, e.g. /myfolder/myfile.txt"
                     }
                 },
                 "required": ["path"]
@@ -569,13 +582,13 @@ def define_model_functions():
         },
         {
             "name": "write_file",
-            "description": "Set the contents of a file",
+            "description": "Overwrite a file with new contents. Always provide the complete file contents in the 'contents' field — this field is mandatory and must never be omitted.",
             params_name: {
                 "type": "object",
                 "properties": {
                     "path": {
                         "type": "string",
-                        "description": "Path to the file, e.g. /home/user/documents/myfile.txt"
+                        "description": "Path to the file, e.g. /myfolder/myfile.txt"
                     },
                     "contents": {
                         "type": "string",
@@ -593,7 +606,7 @@ def define_model_functions():
                 "properties": {
                     "path": {
                         "type": "string",
-                        "description": "Path to the directory, e.g. /home/user/documents"
+                        "description": "Path to the directory, e.g. /myfolder"
                     }
                 },
                 "required": ["path"]
@@ -630,19 +643,45 @@ def define_model_functions():
             tool['type'] = 'function'
 
 
+def add_function_result(input_to_model, tool_use_id, tool_use, result):
+    if API == OPEN_AI:
+        input_to_model.append(
+            {
+                "type": "tool_result",
+                "tool_use_id": tool_use_id,
+                "output": result
+            }
+        )
+    else:
+        input_to_model.append(
+            {
+                "role": ASSISTANT,
+                "content": [
+                    tool_use
+                ]
+            }
+        )
+        input_to_model.append(
+            {
+                "role": USER,
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": tool_use_id,
+                        "content": result
+                    }
+                ]
+            }
+        )
+
+
 notes = ""
-def handle_function_call(name, args, tool_use_id, input_to_model):
+def handle_function_call(name, args, tool_use_id, tool_use, input_to_model):
     global NO_QUESTIONS_IN_AUTO_MODE, notes
 
     # handle each command
     if name == 'done':
-        input_to_model.append(
-            {
-                "type": "function_call_output",
-                "tool_use_id": tool_use_id,
-                "output": "prompt has been marked as completed. You can now ask the user questions"
-            }
-        )
+        add_function_result(input_to_model, tool_use_id, tool_use, "prompt has been marked as completed. You can now ask the user questions")
         NO_QUESTIONS_IN_AUTO_MODE = False
         print_and_save_ai_message_to_history(args['text'], False)
         user_res = print_and_save_user_input_to_history()
@@ -654,58 +693,59 @@ def handle_function_call(name, args, tool_use_id, input_to_model):
         )
 
     elif name == "run_command":
-        command = args['command']
+        command = args.get('command')
+        command = command if command != None else ''
+
+        command = convert_paths_in_command(command)
         input_to_model = input_function_loop(command, tool_use_id, input_to_model)
     elif name == "ls":
-        path = convert_to_directory_path(args['path'])
+        path = args.get('path')
+        path = path if path != None else ''
+
+        path = convert_to_directory_path(path)
         cmd = f"ls -la {path}"
         p_result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
         result = f'{p_result.stdout}\n{p_result.stderr}'
         print_s(f"{output_color}{result}{ANSII_RESET}")
         print_s()
-        input_to_model.append(
-            {
-                "type": "function_call_output",
-                "tool_use_id": tool_use_id,
-                "output": result
-            }
-        )
+        add_function_result(input_to_model, tool_use_id, tool_use, result)
     elif name == "cat":
-        path = convert_to_directory_path(args['path'])
+        path = args.get('path')
+        path = path if path != None else ''
+
+        path = convert_to_directory_path(path)
         p_result = subprocess.run(f"cat {path}", shell=True, capture_output=True, text=True)
         result = f'{p_result.stdout}\n{p_result.stderr}'
         print_s(f"{output_color}{result}{ANSII_RESET}")
         print_s()
-        input_to_model.append(
-            {
-                "type": "function_call_output",
-                "tool_use_id": tool_use_id,
-                "output": result
-            }
-        )
+        add_function_result(input_to_model, tool_use_id, tool_use, result)
     elif name == "write_file":
-        path = convert_to_directory_path(args['path'])
+        path = args.get('path')
+        contents = args.get('contents')
+        path = path if path != None else ''
+        contents = contents if contents != None else ''
+
+        path = convert_to_directory_path(path)
         p = Path(path)
         p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(args["contents"])
+        p.write_text(contents)
 
         result = f"""
-write to file {args["path"]}
+write to file {path}
 ```
-{args["contents"]}
+{contents}
 ```
         """
         print_s(f"{output_color}{result}{ANSII_RESET}")
         print_s()
-        input_to_model.append(
-            {
-                "type": "function_call_output",
-                "tool_use_id": tool_use_id,
-                "output": result
-            }
-        )
+        if contents == '':
+            result += "\nYou didn't specify any file 'contents' so an empty file was created"
+        add_function_result(input_to_model, tool_use_id, tool_use, result)
     elif name == "delete":
-        path = convert_to_directory_path(args['path'])
+        path = args.get('path')
+        path = path if path != None else ''
+
+        path = convert_to_directory_path(path)
         p = Path(path)
         if p.is_file():
             p.unlink()
@@ -714,55 +754,25 @@ write to file {args["path"]}
         result = f"deleted {path}"
         print_s(f"{output_color}{result}{ANSII_RESET}")
         print_s()
-        input_to_model.append(
-            {
-                "type": "function_call_output",
-                "tool_use_id": tool_use_id,
-                "output": result
-            }
-        )
+        add_function_result(input_to_model, tool_use_id, tool_use, result)
     elif name == "get_user_instructions":
-        input_to_model.append(
-            {
-                "type": "function_call_output",
-                "tool_use_id": tool_use_id,
-                "output": auto_prompt
-            }
-        )
+        add_function_result(input_to_model, tool_use_id, tool_use, auto_prompt)
     elif name == "add_to_notes":
         notes = args["note"]
         print_s(f"{output_color}{notes}{ANSII_RESET}")
         print_s()
-        input_to_model.append(
-            {
-                "type": "function_call_output",
-                "tool_use_id": tool_use_id,
-                "output": notes
-            }
-        )
+        add_function_result(input_to_model, tool_use_id, tool_use, notes)
     elif name == "get_notes":
-        input_to_model.append(
-            {
-                "type": "function_call_output",
-                "tool_use_id": tool_use_id,
-                "output": notes
-            }
-        )
+        add_function_result(input_to_model, tool_use_id, tool_use, notes)
     else:
         result = "That's not a command or doesn't make sense in this context"
         print_s(f"{output_color}{result}{ANSII_RESET}")
         print_s()
-        input_to_model.append(
-            {
-                "type": "function_call_output",
-                "tool_use_id": tool_use_id,
-                "output": result
-            }
-        )
+        add_function_result(input_to_model, tool_use_id, tool_use, result)
 
     return input_to_model
 
-def input_function_loop(command, tool_use_id, input_to_model):
+def input_function_loop(command, tool_use_id, tool_use, input_to_model):
     
     # start process
     process = None
@@ -774,13 +784,7 @@ def input_function_loop(command, tool_use_id, input_to_model):
     else:
         output = f"invalid command, working outside designated directory '{AUTO_DIRECTORY}'. Stick to relative paths"
  
-    input_to_model.append(
-        {
-            "type": "function_call_output",
-            "tool_use_id": tool_use_id,
-            "output": output
-        }
-    )
+    add_function_result(input_to_model, tool_use_id, tool_use, output)
     
     kill = False
     made_calls = False
@@ -815,33 +819,15 @@ def input_function_loop(command, tool_use_id, input_to_model):
                         print_s(f"{model_color}{ai_input}{ANSII_RESET}\n")
 
                         # add process output to response for ai
-                        output = process.get_output()
-                        print_s(f"{output_color}{output}{ANSII_RESET}\n")
-                        input_to_model.append(
-                            {
-                                "type": "function_call_output",
-                                "tool_use_id": tool_use_id,
-                                "output": output
-                            }
-                        )
+                        result = process.get_output()
+                        print_s(f"{output_color}{result}{ANSII_RESET}\n")
+                        add_function_result(input_to_model, tool_use_id, output, result)
 
                     elif name == "kill_command":
                         kill = True
-                        input_to_model.append(
-                            {
-                                "type": "function_call_output",
-                                "tool_use_id": tool_use_id,
-                                "output": "Process was killed"
-                            }
-                        )
+                        add_function_result(input_to_model, tool_use_id, output, "Process was killed")
                     else:
-                        input_to_model.append(
-                            {
-                                "type": "function_call_output",
-                                "tool_use_id": tool_use_id,
-                                "output": "Right now you have a command running. If you want run another function, use 'command_input' or 'kill_command' functions to finish first."
-                            }
-                        )
+                        add_function_result(input_to_model, tool_use_id, output, "Right now you have a command running. If you want run another function, use 'command_input' or 'kill_command' functions to finish first.")
                         print_s(f"{error_color}rejected attempt to run command while other command is running{ANSII_RESET}")
 
                 else:
@@ -849,7 +835,7 @@ def input_function_loop(command, tool_use_id, input_to_model):
                     input_to_model.append(
                         {
                             "content": msg,
-                            "role": SYSTEM,
+                            "role": SYSTEM if API == OPEN_AI else USER,
                         }
                     )
                     print_s(f"{error_color}rejected message since ai is running a command currently{ANSII_RESET}")
@@ -861,11 +847,11 @@ def input_function_loop(command, tool_use_id, input_to_model):
             input_to_model.append(
                 {
                     "content": outputs,
-                    "role": SYSTEM,
+                    "role": SYSTEM if API == OPEN_AI else USER,
                 }
             )
 
-    if not process.is_finished(): process.kill()
+    if process != None and not process.is_finished(): process.kill()
     return input_to_model
 
 conversation_summary = ''
@@ -885,7 +871,7 @@ def call_api(model_input, include_functions=True, updating_summary=False):
 
     
     # add conversation history
-    if model_input[0]["content"].startswith("CONVERSATION HISTORY SUMMARY:"):
+    if isinstance(model_input[0].get("content"), str) and model_input[0]["content"].startswith("CONVERSATION HISTORY SUMMARY:"):
         model_input[0] = {
             "role" : SYSTEM if API == OPEN_AI else USER,
             "content": f"CONVERSATION HISTORY SUMMARY:\n{conversation_summary}"
@@ -940,7 +926,7 @@ def call_api(model_input, include_functions=True, updating_summary=False):
         if include_functions:
             body = json.dumps({
                 "model": MODEL,
-                "max_tokens": 1024,
+                "max_tokens": 64000,
                 "messages": model_input,
                 "tools": tools,
                 "tool_choice": "auto" if API == OPEN_AI else {"type":"auto"}
@@ -1024,6 +1010,8 @@ def auto_mode_loop(max_attempts=100):
 
         # prompt ai and handle response
         outputs, error = call_api(input_to_model)
+        if error:
+            print_s(json.dumps(input_to_model, indent=4))
         input_to_model = []
         if not error:
 
@@ -1039,11 +1027,11 @@ def auto_mode_loop(max_attempts=100):
                         input_to_model.append(
                             {
                                 "content": "The user has asked you complete this prompt without asking questions. Just complete the prompt with your best guess on the users' intentions and call the 'done' function when finished.",
-                                "role": SYSTEM,
+                                "role": SYSTEM if API == OPEN_AI else USER,
                             }
                         )
                     else:
-                        message = output[0]['text']
+                        message = output['text']
                         print_and_save_ai_message_to_history(message, False)
                         user_res = print_and_save_user_input_to_history()
                         input_to_model.append(
@@ -1056,9 +1044,9 @@ def auto_mode_loop(max_attempts=100):
                     name = output['name']
                     args = output['input']
                     tool_use_id = output['id']
-                    print_s(f"{model_color}{name} {output['arguments']} {tool_use_id}{ANSII_RESET}")
+                    print_s(f"{model_color}{name} {json.dumps(args)} {tool_use_id}{ANSII_RESET}")
                     print_s()
-                    input_to_model = handle_function_call(name, args, tool_use_id, input_to_model)
+                    input_to_model = handle_function_call(name, args, tool_use_id, output, input_to_model)
         else:
             message = outputs
             print_and_save_ai_message_to_history(message, error)
