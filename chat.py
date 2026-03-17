@@ -29,43 +29,18 @@ ANTHROPIC = 'anthropic'
 parser = argparse.ArgumentParser(description="A terminal app for accessing chat gpt")
 parser.add_argument('-ok', '--open_ai_api_key', help='Your open-api key created at https://platform.openai.com/api-keys')
 parser.add_argument('-ak', '--anthropic_api_key', required=True, help='Your anthropic api key created at https://platform.claude.com/settings/keys')
-parser.add_argument('-t', '--tokens', type=int, default=4096, help="Max tokens chat will respond with")
 parser.add_argument('-m', '--model', default='claude-haiku-4-5', help='The api model you\'ll access. View models here https://platform.openai.com/docs/models')
 parser.add_argument('-a', '--api', default=ANTHROPIC, help=f'Which api your model name is from. Currenlty only \'{OPEN_AI}\' and \'{ANTHROPIC}\' are supported.')
-parser.add_argument('-T', '--temperature', type=float, default=0.4,  help='Higher values like 0.8 will make the output more random, while lower values like 0.2 will make it more focused and deterministic. Range 0-2')
 
-parser.add_argument('-d', '--dir', help='The working directory where the model can run commands in auto mode')
+parser.add_argument('-d', '--dir', help='The directory in which the AI can execute commands and edit files. The currently directory by default.')
 
-# add in app command notes
-subparsers = parser.add_subparsers(dest='command', title='Commands')
-vim_parser = subparsers.add_parser(
-    'vim', 
-    help='''
-        To edit a message sent to chat gpt, you can type 'vim' + 'enter' and the conversation will opened in vim.
-        This can be handy if you want to copy and paste or create newlines in your response without sending
-        the message to chat gpt. To submit the message simply save and quit vim by entering 'esc' then ':' 
-        the 'wq' and hit 'enter'. 
-
-        Previous messages will also be visible in vim, though editing these messages won't alter the conversation
-        history. Only new content after the last '# USER' tag will be retrieved after you're finished. 
-    '''
-)
-quit_parser = subparsers.add_parser(
-    'quit',
-    help='''
-        To finish the conversation you can type 'quit' or 'q' and hit enter. You'll then be given the option
-        to get your conversation output to a file.
-    '''
-)
 
 
 args = parser.parse_args()
 
 MODEL = args.model
-TOKENS = args.tokens
 OPEN_AI_API_KEY = args.open_ai_api_key
 ANTHROPIC_API_KEY = args.anthropic_api_key
-TEMPERATURE = args.temperature
 
 
 
@@ -196,7 +171,7 @@ models = """
 Docs: https://developers.openai.com/api/docs/models/all, https://platform.claude.com/docs/en/about-claude/pricing
 """
 def user_prompt():
-    global auto_prompt, NO_QUESTIONS_IN_AUTO_MODE
+    global auto_prompt, NO_QUESTIONS_IN_AUTO_MODE, AUTO_DIRECTORY
     
     user_input = input()
 
@@ -233,9 +208,21 @@ def user_prompt():
         if (user_input == 'y'):
             write_history(history)
         exit(0)
+    elif user_input.strip() == "dir":
+        print_s()
+        print_s(f"{assistant_color}SET ASSISTANT SANDBOX DIRECTORY{ANSII_RESET}\n")
+        print_s(f"{model_color}directory: {ANSII_RESET}")
+        AUTO_DIRECTORY = input()
+        while not os.path.isdir(AUTO_DIRECTORY):
+            print_s(f"{error_color}not a directory{ANSII_RESET}")
+            AUTO_DIRECTORY = input()
+        
+        print_s()
+        print_s(f"Assistant now sandboxed to {AUTO_DIRECTORY}\n")
+
+        user_input = ''
     elif user_input.strip() == "auto":
         user_input = set_auto_mode(True)
-
     elif user_input.strip() == "summarize":
         print_s()
         print_s(f"{assistant_color}SUMMARIZING A DIRECTORY!{ANSII_RESET}\n")
@@ -296,6 +283,7 @@ def user_prompt():
         print_s("- save (save your conversation to a file)")
         print_s("- summarize (have the assistant read through a repo and summarize it for you)")
         print_s("- model (switch model being used)")
+        print_s("- dir (sandbox the model to a certain directory. By default the current directory is used)")
         print_s(ANSII_RESET)
 
         user_input = ''
@@ -1132,7 +1120,6 @@ def auto_mode_loop(max_attempts=100):
 define_model_functions()
 while(True):
     
-
     # loop
     auto_mode_loop()
 
