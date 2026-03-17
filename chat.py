@@ -113,12 +113,14 @@ def loading_indicator():
     start = time.time()
     length = 0
     while not request_done:
-        elapsed = str(time.time() - start)[:5]
+        elapsed = f"{(time.time() - start):.1f}"
         elapsed += 's'
         move_cursor_back(length)
         sys.stdout.write(temperature_color + elapsed + ANSII_RESET)
         sys.stdout.flush()
         length = len(elapsed)
+        time.sleep(0.1)
+        
 
     # clear line
     sys.stdout.write('\r\x1b[K')
@@ -183,12 +185,12 @@ def write_history(history):
 
 auto_prompt = ""
 models = """
-- gpt-5.4-2026-03-05
-- gpt-5-mini-2025-08-07
-- gpt-5-nano-2025-08-07
+- gpt-5.4
+- gpt-5-mini
+- gpt-5-nano
 - claude-opus-4-6
 - claude-sonnet-4-6
-- claude-haiku-4-5-20251001
+- claude-haiku-4-5
 - (or enter specific model name)
 Docs: https://developers.openai.com/api/docs/models/all, https://platform.claude.com/docs/en/about-claude/pricing
 """
@@ -647,8 +649,16 @@ def add_function_result(input_to_model, tool_use_id, tool_use, result):
     if API == OPEN_AI:
         input_to_model.append(
             {
-                "type": "tool_result",
-                "tool_use_id": tool_use_id,
+                "type": "function_call",
+                "call_id": tool_use_id,
+                "name": tool_use['name'],
+                "arguments": json.dumps(tool_use['input'])
+            }
+        )
+        input_to_model.append(
+            {
+                "type": "function_call_output",
+                "call_id": tool_use_id,
                 "output": result
             }
         )
@@ -963,7 +973,7 @@ def call_api(model_input, include_functions=True, updating_summary=False):
                         {
                             "type": "text",
                             "role": output_s['role'],
-                            "text": output_s['text']
+                            "text": output_s['content'][0]['text']
                         }
                     )
                 elif output_s['type'] == 'function_call':
@@ -980,7 +990,8 @@ def call_api(model_input, include_functions=True, updating_summary=False):
             
     else:
         output = f"Error: {response.status} - {response.read().decode()}{ANSII_RESET}"
-        # print_s(output)
+        print_s(body)
+        print_s(output)
         error = True
     conn.close()
 

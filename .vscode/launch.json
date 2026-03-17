@@ -11,8 +11,10 @@
             "program": "chat.py",
             "console": "integratedTerminal",
             "args" :[
-                "--api", "anthropic",
-                "--model", "claude-haiku-4-5-20251001",
+                // "--api", "anthropic",
+                // "--model", "claude-haiku-4-5-20251001",
+                "--api", "open_ai",
+                "--model", "gpt-5-mini",
                 // "--model", "claude-sonnet-4-6",
                 "--dir", "auto_mode_test",
             ]
