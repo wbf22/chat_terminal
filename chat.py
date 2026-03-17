@@ -30,8 +30,8 @@ parser = argparse.ArgumentParser(description="A terminal app for accessing chat 
 parser.add_argument('-ok', '--open_ai_api_key', help='Your open-api key created at https://platform.openai.com/api-keys')
 parser.add_argument('-ak', '--anthropic_api_key', required=True, help='Your anthropic api key created at https://platform.claude.com/settings/keys')
 parser.add_argument('-t', '--tokens', type=int, default=4096, help="Max tokens chat will respond with")
-parser.add_argument('-m', '--model', help='The api model you\'ll access. View models here https://platform.openai.com/docs/models', default='gpt-4.1-nano')
-parser.add_argument('-a', '--api', default=OPEN_AI, help=f'Which api your model name is from. Currenlty only \'{OPEN_AI}\' and \'{ANTHROPIC}\' are supported.')
+parser.add_argument('-m', '--model', default='claude-haiku-4-5', help='The api model you\'ll access. View models here https://platform.openai.com/docs/models')
+parser.add_argument('-a', '--api', default=ANTHROPIC, help=f'Which api your model name is from. Currenlty only \'{OPEN_AI}\' and \'{ANTHROPIC}\' are supported.')
 parser.add_argument('-T', '--temperature', type=float, default=0.4,  help='Higher values like 0.8 will make the output more random, while lower values like 0.2 will make it more focused and deterministic. Range 0-2')
 
 parser.add_argument('-d', '--dir', help='The working directory where the model can run commands in auto mode')
