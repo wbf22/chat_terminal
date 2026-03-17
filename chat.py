@@ -98,7 +98,7 @@ USER = 'user'
 SYSTEM = 'system'
 AUTO_DIRECTORY = os.getcwd() if args.dir == None else args.dir
 NO_QUESTIONS_IN_AUTO_MODE = False
-MAX_ACTIONS = 100
+MAX_ACTIONS = 24
 API = args.api
 
 
@@ -184,6 +184,7 @@ def write_history(history):
         file.write("\n")
 
 auto_prompt = ""
+actions = 0
 models = """
 - gpt-5.4
 - gpt-5-mini
@@ -233,28 +234,8 @@ def user_prompt():
             write_history(history)
         exit(0)
     elif user_input.strip() == "auto":
+        user_input = set_auto_mode(True)
 
-        NO_QUESTIONS_IN_AUTO_MODE = True
-        print_s(f'{model_color}In auto mode! Your ai helper will iterate in this directory until it believes it has achieved the goal you provide it. Once started, the model will continue it achieves it\'s goal or hits the max attempts limit{ANSII_RESET}')
-        print_s()
-        # MAX_ACTIONS = input(f"{user_color}Max api usage (number of requests)\n{ANSII_RESET}")
-        # MAX_ACTIONS = int(MAX_ACTIONS)
-
-        print_s(f"{user_color}Task for ai:{ANSII_RESET}")
-        user_input = user_prompt()
-
-        auto_prompt = f"""
-You're working in a loop to complete the following user prompt:
-{user_input}
-
-You can call the provided functions to run commands, explore your sandboxed directory, and create
-and edit files. We'll handle paths as relative to your sandboxed directory.
-Once done use the 'done' function to indicate you've finished
-
-Sometimes you can send a regular message to ask them for clarification on the prompt, 
-though try to avoid bothering the user until it's important.
-        """
-        user_input = auto_prompt
     elif user_input.strip() == "summarize":
         print_s()
         print_s(f"{assistant_color}SUMMARIZING A DIRECTORY!{ANSII_RESET}\n")
@@ -379,6 +360,7 @@ def summarize_repo(directories: list[str], exclude: list[str]):
             if not is_excluded:
                 all_files.append(f)
 
+    print_s("Starting...")
     prompt = """
 The user has requested you help them summarize and understand the repo they're working in. 
 We'll provide you files, one by one and ask you to summarize them. We'll record your summaries
@@ -430,13 +412,14 @@ summary of the repo and start helping them with their questions.
             tries += 1
 
         output = outputs[0]
-        ai_summary = output[0]['text'].replace("\n", " ")
+        ai_summary = output['text'].replace("\n", " ")
         print_s(f" - {ai_summary}")
         notes.append(f"{file} - {ai_summary}")
 
         time.sleep(4)
         
 
+    print_s()
     note_file = "\n".join(notes)
     prompt = f"{note_file} \n\n Now summarize the repo for the user"
     input_to_model = [
@@ -445,14 +428,25 @@ summary of the repo and start helping them with their questions.
             "role": SYSTEM if API == OPEN_AI else USER,
         }
     ]
+    print_s("Summarizing...")
     outputs, error = call_api(input_to_model, include_functions=False)
     message = None
     if error:
         message = outputs
     else:
-        message = outputs[0]['content'][0]['text']
+        message = outputs[0]['text']
     print_and_save_ai_message_to_history(message, error)
 
+def check_for_max_actions():
+    global actions
+    if actions > MAX_ACTIONS:
+        print_s(f"{output_color}The assistant has made {actions} requests on this task. Would you like them to continue? (y/n){ANSII_RESET}")
+        if input() == 'n':
+            return False
+        else:
+            actions = 0    
+    
+    return True
 
 class TalkProcess:
 
@@ -644,6 +638,42 @@ def define_model_functions():
         for tool in tools:
             tool['type'] = 'function'
 
+def set_auto_mode(set_on: bool, ai_done_response=''):
+    global auto_prompt, NO_QUESTIONS_IN_AUTO_MODE, actions
+    user_res = None
+    if set_on:
+        NO_QUESTIONS_IN_AUTO_MODE = True
+
+        print_s(f'{model_color}In auto mode! Your ai helper will iterate in this directory until it believes it has achieved the goal you provide it. Once started, the model will continue it achieves it\'s goal or hits the max attempts limit{ANSII_RESET}')
+        print_s()
+        # MAX_ACTIONS = input(f"{user_color}Max api usage (number of requests)\n{ANSII_RESET}")
+        # MAX_ACTIONS = int(MAX_ACTIONS)
+
+        print_s(f"{user_color}Task for ai:{ANSII_RESET}")
+        user_input = user_prompt()
+
+        auto_prompt = f"""
+You're working in a loop to complete the following user prompt:
+{user_input}
+
+You can call the provided functions to run commands, explore your sandboxed directory, and create
+and edit files. We'll handle paths as relative to your sandboxed directory.
+Once done use the 'done' function to indicate you've finished
+
+Sometimes you can send a regular message to ask them for clarification on the prompt, 
+though try to avoid bothering the user until it's important.
+        """
+        user_res = auto_prompt
+
+    else:
+        NO_QUESTIONS_IN_AUTO_MODE = False
+        print_and_save_ai_message_to_history(ai_done_response, False)
+        user_res = print_and_save_user_input_to_history()
+
+    actions = 0
+
+    return user_res
+
 
 def add_function_result(input_to_model, tool_use_id, tool_use, result):
     if API == OPEN_AI:
@@ -692,9 +722,7 @@ def handle_function_call(name, args, tool_use_id, tool_use, input_to_model):
     # handle each command
     if name == 'done':
         add_function_result(input_to_model, tool_use_id, tool_use, "prompt has been marked as completed. You can now ask the user questions")
-        NO_QUESTIONS_IN_AUTO_MODE = False
-        print_and_save_ai_message_to_history(args['text'], False)
-        user_res = print_and_save_user_input_to_history()
+        user_res = set_auto_mode(False, args['text'])
         input_to_model.append(
             {
                 "content": user_res,
@@ -783,6 +811,7 @@ write to file {path}
     return input_to_model
 
 def input_function_loop(command, tool_use_id, tool_use, input_to_model):
+    global actions
     
     # start process
     process = None
@@ -798,11 +827,15 @@ def input_function_loop(command, tool_use_id, tool_use, input_to_model):
     
     kill = False
     made_calls = False
-    i = 0
-    while process != None and not process.is_finished() and i < MAX_ACTIONS:
+    while process != None and not process.is_finished():
+
+        # prompt user if max_actions has been hit
+        should_continue = check_for_max_actions()
+        if not should_continue:
+            break
 
         # break out if process is finished
-        i+=1
+        actions += 1
         if process.is_finished(): break
 
         # otherwise send output to model
@@ -990,8 +1023,8 @@ def call_api(model_input, include_functions=True, updating_summary=False):
             
     else:
         output = f"Error: {response.status} - {response.read().decode()}{ANSII_RESET}"
-        print_s(body)
-        print_s(output)
+        # print_s(body)
+        # print_s(output)
         error = True
     conn.close()
 
@@ -1007,6 +1040,7 @@ def call_api(model_input, include_functions=True, updating_summary=False):
 
 stop = threading.Event()
 def auto_mode_loop(max_attempts=100):
+    global actions
 
     # ai loop
     user_input = print_and_save_user_input_to_history()
@@ -1021,8 +1055,7 @@ def auto_mode_loop(max_attempts=100):
 
         # prompt ai and handle response
         outputs, error = call_api(input_to_model)
-        if error:
-            print_s(json.dumps(input_to_model, indent=4))
+        actions += 1
         input_to_model = []
         if not error:
 
@@ -1055,12 +1088,24 @@ def auto_mode_loop(max_attempts=100):
                     name = output['name']
                     args = output['input']
                     tool_use_id = output['id']
-                    print_s(f"{model_color}{name} {json.dumps(args)} {tool_use_id}{ANSII_RESET}")
+                    print_s(f"{model_color}{name} {json.dumps(args)[:64]}... {tool_use_id}{ANSII_RESET}")
                     print_s()
                     input_to_model = handle_function_call(name, args, tool_use_id, output, input_to_model)
         else:
             message = outputs
             print_and_save_ai_message_to_history(message, error)
+
+        # ask for prompt to continue after max attempts
+        if NO_QUESTIONS_IN_AUTO_MODE:
+            should_continue = check_for_max_actions()
+            if not should_continue:
+                user_res = set_auto_mode(False, "CANCEL JOB")
+                input_to_model.append(
+                    {
+                        "content": user_res,
+                        "role": USER,
+                    }
+                )
 
         i += 1
 
