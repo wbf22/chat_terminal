@@ -137,7 +137,6 @@ def print_s(
     print(*values, sep=sep, end=end, flush=flush, file=file)
 
 
-
 USER_TAG = 'YOU: (type help for special commands)'
 def print_and_save_user_input_to_history():
 
@@ -273,6 +272,12 @@ def user_prompt():
         define_model_functions()
 
         user_input = ''
+    elif user_input.strip() == "notes":
+        print_s()
+        print_s(f"{assistant_color}ASSISTANT'S NOTES (This is what the assistant has written down about the current conversation and represents what they remember):{ANSII_RESET}\n")
+        print_s(conversation_summary)
+        print_s()
+        user_input = ''
     elif user_input.strip() == "help":
         print_s(model_color)
         print_s("Help:")
@@ -283,6 +288,7 @@ def user_prompt():
         print_s("- summarize (have the assistant read through a repo and summarize it for you)")
         print_s("- model (switch model being used)")
         print_s("- dir (sandbox the model to a certain directory. By default the current directory is used)")
+        print_s("- notes (This is what the assistant has written down about the current conversation and represents what they remember)")
         print_s(ANSII_RESET)
 
         user_input = ''
@@ -605,7 +611,7 @@ def define_model_functions():
         },
         {
             "name": "add_to_notes",
-            "description": "If you would like to write something down to remember, you can do so with this function. It can later be recalled with the 'get_notes' function. This will replace the contents of your notes",
+            "description": "If you would like to write something down to remember, you can do so with this function. It can later be recalled with the 'get_notes' function. This will replace the contents of your notes. Your notes will be included with each request for reference.",
             params_name: {
                 "type": "object",
                 "properties": {
@@ -619,7 +625,7 @@ def define_model_functions():
         },
         {
             "name": "get_notes",
-            "description": "Returns notes you may have previously written with the 'add_to_notes' function",
+            "description": "Returns notes you may have previously written with the 'add_to_notes' function. Your notes will be included with each request for reference.",
             params_name: { "type": "object", "properties": {}}
         },
     ]
@@ -664,7 +670,6 @@ though try to avoid bothering the user until it's important.
 
     return user_res
 
-
 def add_function_result(input_to_model, tool_use_id, tool_use, result):
     if API == OPEN_AI:
         input_to_model.append(
@@ -704,10 +709,8 @@ def add_function_result(input_to_model, tool_use_id, tool_use, result):
             }
         )
 
-
-notes = ""
 def handle_function_call(name, args, tool_use_id, tool_use, input_to_model):
-    global NO_QUESTIONS_IN_AUTO_MODE, notes
+    global NO_QUESTIONS_IN_AUTO_MODE, conversation_summary
 
     # handle each command
     if name == 'done':
@@ -786,12 +789,12 @@ write to file {path}
     elif name == "get_user_instructions":
         add_function_result(input_to_model, tool_use_id, tool_use, auto_prompt)
     elif name == "add_to_notes":
-        notes = args["note"]
-        print_s(f"{output_color}{notes}{ANSII_RESET}")
+        conversation_summary = args["note"]
+        print_s(f"{output_color}{conversation_summary}{ANSII_RESET}")
         print_s()
-        add_function_result(input_to_model, tool_use_id, tool_use, notes)
+        add_function_result(input_to_model, tool_use_id, tool_use, conversation_summary)
     elif name == "get_notes":
-        add_function_result(input_to_model, tool_use_id, tool_use, notes)
+        add_function_result(input_to_model, tool_use_id, tool_use, conversation_summary)
     else:
         result = "That's not a command or doesn't make sense in this context"
         print_s(f"{output_color}{result}{ANSII_RESET}")
@@ -895,7 +898,6 @@ def update_conversation_summary(last_input_to_model):
     if not error:
         conversation_summary = output[0]['text']
     
-
 def call_api(model_input, include_functions=True, updating_summary=False):
     global request_done
     time_elapsed_displayer = threading.Thread(target=loading_indicator)
@@ -923,7 +925,7 @@ def call_api(model_input, include_functions=True, updating_summary=False):
         model_input.append(
             {
                 "role" : SYSTEM if API == OPEN_AI else USER,
-                "content": "Please return a summary of the conversation up to this point for your future reference, making sure to remember important details"
+                "content": "Please return the important details of the current conversation. This will act as your 'memory' for the next request."
             }
         )
 
@@ -1027,7 +1029,6 @@ def call_api(model_input, include_functions=True, updating_summary=False):
 
     return output, error
 
-
 stop = threading.Event()
 def auto_mode_loop(max_attempts=100):
     global actions
@@ -1058,6 +1059,7 @@ def auto_mode_loop(max_attempts=100):
                 if type == "text":
                     if NO_QUESTIONS_IN_AUTO_MODE:
                         print_s(f"{error_color}rejected message since prompt has not been completed{ANSII_RESET}")
+                        print_and_save_ai_message_to_history(message, False)
                         input_to_model.append(
                             {
                                 "content": "The user has asked you complete this prompt without asking questions. Just complete the prompt with your best guess on the users' intentions and call the 'done' function when finished.",
