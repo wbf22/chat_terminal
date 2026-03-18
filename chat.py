@@ -653,16 +653,16 @@ You're working in a loop to complete the following user prompt:
 {user_input}
 
 You can call the provided functions to run commands, explore your sandboxed directory, and create
-and edit files. We'll handle paths as relative to your sandboxed directory.
-Once done use the 'done' function to indicate you've finished
+and edit files. We'll handle paths as relative to your sandboxed directory. The user won't respond to
+you until you're done. 
 
-Sometimes you can send a regular message to ask them for clarification on the prompt, 
-though try to avoid bothering the user until it's important.
+Make sure to call the 'done' function to indicate you've finished.
         """
         user_res = auto_prompt
 
     else:
         NO_QUESTIONS_IN_AUTO_MODE = False
+        auto_prompt = ''
         print_and_save_ai_message_to_history(ai_done_response, False)
         user_res = print_and_save_user_input_to_history()
 
@@ -747,7 +747,7 @@ def handle_function_call(name, args, tool_use_id, tool_use, input_to_model):
         path = convert_to_directory_path(path)
         p_result = subprocess.run(f"cat {path}", shell=True, capture_output=True, text=True)
         result = f'{p_result.stdout}\n{p_result.stderr}'
-        print_s(f"{output_color}{result}{ANSII_RESET}")
+        print_s(f"{output_color}{result[:256]}\n...{ANSII_RESET}")
         print_s()
         add_function_result(input_to_model, tool_use_id, tool_use, result)
     elif name == "write_file":
@@ -896,7 +896,7 @@ def update_conversation_summary(last_input_to_model):
 
     output, error = call_api(last_input_to_model, include_functions=False, updating_summary=True)
     if not error:
-        conversation_summary = output[0]['text']
+        conversation_summary = f"{auto_prompt}\n{output[0]['text']}"
     
 def call_api(model_input, include_functions=True, updating_summary=False):
     global request_done
@@ -1059,7 +1059,7 @@ def auto_mode_loop(max_attempts=100):
                 if type == "text":
                     if NO_QUESTIONS_IN_AUTO_MODE:
                         print_s(f"{error_color}rejected message since prompt has not been completed{ANSII_RESET}")
-                        print_and_save_ai_message_to_history(message, False)
+                        print_and_save_ai_message_to_history(output['text'], False)
                         input_to_model.append(
                             {
                                 "content": "The user has asked you complete this prompt without asking questions. Just complete the prompt with your best guess on the users' intentions and call the 'done' function when finished.",
