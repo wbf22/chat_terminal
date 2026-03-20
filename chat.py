@@ -182,12 +182,25 @@ def load_memory():
     global memory
     with open(MEMORY_FILE_PATH, 'r') as file:
         content = file.read()
-        memory = json.loads(content)
+        try:
+            memory = json.loads(content)
+        except ValueError as e:
+            print_s(f"{error_color}Error loading memories from {MEMORY_FILE_PATH}:\n{e}")
 
 def write_memory():
-    json_str = json.dumps(memory, indent=4)
-    with open(MEMORY_FILE_PATH, 'w') as file:
-        file.write(json_str)
+    global memory
+
+    if using_memory:
+        # limit the size of memory to a few hundred memories
+        memory = memory[:100]
+
+        # write to file
+        json_str = json.dumps(memory, indent=4)
+        with open(MEMORY_FILE_PATH, 'w') as file:
+            file.write(json_str)
+
+        # add to notes sent with each request
+        add_memory_to_notes()
 
 def promp_ai_for_memory():
     global input_to_model
@@ -362,8 +375,7 @@ def user_prompt():
 
         if choice != '3':
             using_memory = True
-            write_memory()    
-            add_memory_to_notes()
+            write_memory()
         
         print_s()
         user_input = ''
@@ -429,7 +441,7 @@ def is_command_in_directory(command: str) -> bool:
     return True
 
 def summarize_repo(directories: list[str], exclude: list[str]):
-    global input_to_model
+    global input_to_model, memory
 
     MAX_FILE_SIZE_BYTES = 500 * 1000
 
@@ -530,6 +542,11 @@ summary of the repo and start helping them with their questions.
     else:
         message = outputs[0]['text']
     print_and_save_ai_message_to_history(message, error)
+
+    # save as memory
+    memory.append(message)
+    write_memory()
+    
 
 def check_for_max_actions():
     global actions
@@ -1209,6 +1226,7 @@ define_model_functions()
 p = Path(MEMORY_FILE_PATH)
 if p.exists():
     print_s(f"{output_color}Using {MEMORY_FILE_PATH} for memory{ANSII_RESET}")
+    using_memory = True
     load_memory()
     add_memory_to_notes()
 
