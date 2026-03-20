@@ -177,16 +177,44 @@ def write_history(history):
         file.write("\n")
 
 using_memory = False
+memory = []
 def load_memory():
-    pass
+    global memory
+    with open(MEMORY_FILE_PATH, 'r') as file:
+        content = file.read()
+        memory = json.loads(content)
 
 def write_memory():
-    pass
+    json_str = json.dumps(memory, indent=4)
+    with open(MEMORY_FILE_PATH, 'w') as file:
+        file.write(json_str)
+
+def promp_ai_for_memory():
+    global input_to_model
+
+    print_s()
+    print_s(f"{output_color}having ai store memory for conversation{ANSII_RESET}\n")
+    input_to_model.append(
+        {
+            "content": f"SYSTEM: The user has requested you make a memory of the current conversation to be saved for your reference. Please describe the most important points of this conversation in a one line summary.",
+            "role": SYSTEM if API == OPEN_AI else USER,
+        }
+    )
+    outputs, error = call_api(input_to_model, include_functions=False)
+    input_to_model = input_to_model[:-1]
+    if not error:
+        new_mem = outputs[0]['text']
+        print_s(f"{assistant_color}New memory:\n {new_mem}{ANSII_RESET}")
+        memory.append(new_mem)
+    else:
+        print_s(f"{error_color} Error: {outputs}{ANSII_RESET}")
+    
+    print_s()
 
 auto_prompt = ""
 actions = 0
 def user_prompt():
-    global auto_prompt, NO_QUESTIONS_IN_AUTO_MODE, AUTO_DIRECTORY
+    global auto_prompt, NO_QUESTIONS_IN_AUTO_MODE, AUTO_DIRECTORY, input_to_model, memory
     
     user_input = input()
 
@@ -212,8 +240,9 @@ def user_prompt():
         last_message_start = content.rfind(USER_TAG)
         user_input = content[last_message_start+37:]
         print_s(user_input)
-
     elif user_input.strip() == 'quit' or user_input == 'q':
+        promp_ai_for_memory()
+        write_memory()
         exit(0)
     elif user_input.strip() == "save":
         print_s()
@@ -295,6 +324,49 @@ def user_prompt():
         print_s(conversation_summary)
         print_s()
         user_input = ''
+    elif user_input.strip() == "memory":
+        print_s()
+        print_s(f"{assistant_color}SAVE MEMORY{ANSII_RESET}\n")
+        print_s(f"{model_color}[0] have model save memory of what is currently going on \n[1] manually enter something for the AI to remember\n[2] list existing memories \n[3] cancel \n{ANSII_RESET}")
+        choice = input()
+        if choice == "0":
+            promp_ai_for_memory()
+        elif choice == "1":
+            print_s(f"{assistant_color}enter custom memory:\n{ANSII_RESET}")
+            new_mem = input()
+            print_s(f"{assistant_color}New memory:\n {new_mem}{ANSII_RESET}")
+            memory.append(new_mem)
+        elif choice == "2":
+            for i, mem in enumerate(memory):
+                print_s(f"[{i}] - {output_color}{mem}{ANSII_RESET}")
+
+            print_s(f"{assistant_color}enter a memory number from the list above to delete it, or hit enter to finish\n{ANSII_RESET}")
+            indices_to_remove = []
+            to_delete = input()
+            while to_delete != '':
+                had_error = False
+                try:
+                    to_delete = int(to_delete)
+                    if to_delete < len(memory):
+                        indices_to_remove.append(to_delete)
+                        print_s(f"{output_color}Removed: [{to_delete}] - {memory[to_delete]}{ANSII_RESET}")
+                    else:
+                        had_error = True
+                except ValueError:
+                    had_error = True
+
+                if had_error:
+                    print_s(f"{error_color}Not a valid number or not in list above: {to_delete}{ANSII_RESET}")
+
+            memory = [v for i, v in enumerate(memory) if i not in indices_to_remove]
+
+        if choice != '3':
+            using_memory = True
+            write_memory()    
+            add_memory_to_notes()
+        
+        print_s()
+        user_input = ''
     elif user_input.strip() == "help":
         print_s(model_color)
         print_s("Help:")
@@ -306,6 +378,7 @@ def user_prompt():
         print_s("- model (switch model being used)")
         print_s("- dir (sandbox the model to a certain directory. By default the current directory is used)")
         print_s("- notes (This is what the assistant has written down about the current conversation and represents what they remember)")
+        print_s("- memory (Make or manage memories stored in this repo for persistant context)")
         print_s(ANSII_RESET)
 
         user_input = ''
@@ -908,7 +981,12 @@ def input_function_loop(command, tool_use_id, tool_use, input_to_model):
 
 input_to_model = []
 notes = ''
-def update_notes_and_shrink_history():
+def add_memory_to_notes():
+    global notes
+    notes = f"Your notes:\n{notes}\n\nLong term memories:\n{"\n".join(memory)}"
+
+
+def prompt_ai_to_update_notes_and_shrink_history():
     global notes, input_to_model
 
 
@@ -930,10 +1008,11 @@ def update_notes_and_shrink_history():
         # add model response as first message and replace notes
         if not error and len(outputs) != 0:
             notes = outputs[0]['text']
+            add_memory_to_notes()
         
             input_to_model = input_to_model[-HISTORY_LENGTH:]
             input_to_model[0] = {
-                "content": f"Your notes:\n{notes}",
+                "content": notes,
                 "role": SYSTEM if API == OPEN_AI else USER,
             }
 
@@ -1083,7 +1162,7 @@ def auto_mode_loop(max_attempts=100):
                         print_and_save_ai_message_to_history(message, False)
 
                         # update conversaion summary if conversation is getting long
-                        update_notes_and_shrink_history()
+                        prompt_ai_to_update_notes_and_shrink_history()
 
                         # prompt user
                         user_res = print_and_save_user_input_to_history()
@@ -1125,20 +1204,22 @@ def auto_mode_loop(max_attempts=100):
 # set up model functions based on api
 define_model_functions()
 
-# set first note message in input
-input_to_model.append(
-    {
-        "content": f"Your notes:\n{notes}",
-        "role": SYSTEM if API == OPEN_AI else USER,
-    }
-)
 
 # initialize memory
 p = Path(MEMORY_FILE_PATH)
 if p.exists():
-    print_s(f"{output_color}Using {MEMORY_FILE_PATH}{ANSII_RESET}")
-else:
-    using_memory = input("Use memory")
+    print_s(f"{output_color}Using {MEMORY_FILE_PATH} for memory{ANSII_RESET}")
+    load_memory()
+    add_memory_to_notes()
+
+
+# set first note message in input
+input_to_model.append(
+    {
+        "content": notes,
+        "role": SYSTEM if API == OPEN_AI else USER,
+    }
+)
 
 while(True):
     
