@@ -85,7 +85,7 @@ SYSTEM = 'system'
 AUTO_DIRECTORY = os.getcwd() if args.dir == None else args.dir
 NO_QUESTIONS_IN_AUTO_MODE = False
 MAX_ACTIONS = 24
-HISTORY_LENGTH = 20
+HISTORY_LENGTH = 10
 CONVERSATION_SUMMARY_RATE = 10
 
 
@@ -348,6 +348,8 @@ def is_command_in_directory(command: str) -> bool:
     return True
 
 def summarize_repo(directories: list[str], exclude: list[str]):
+    global input_to_model
+
     MAX_FILE_SIZE_BYTES = 500 * 1000
 
     all_files = []
@@ -372,12 +374,12 @@ We'll provide you files, one by one and ask you to summarize them. We'll record 
 in a note sheet which we'll return to you when we've finished. You can then provide the user with a 
 summary of the repo and start helping them with their questions.
     """
-    input_to_model = [
+    input_to_model.append(
         {
             "content": prompt,
             "role": SYSTEM if API == OPEN_AI else USER,
         }
-    ]
+    )
     call_api(input_to_model, include_functions=False)
 
     notes = []
@@ -402,12 +404,12 @@ summary of the repo and start helping them with their questions.
 
 
         prompt = f"```{file}\n{contents}\n```\nReturn a one line summary of this file"
-        input_to_model = [
+        input_to_model.append(
             {
                 "content": prompt,
                 "role": SYSTEM if API == OPEN_AI else USER,
             }
-        ]
+        )
         outputs, error = call_api(input_to_model, include_functions=False)
         ai_summary = None
         tries = 0
@@ -420,6 +422,12 @@ summary of the repo and start helping them with their questions.
         ai_summary = output['text'].replace("\n", " ")
         print_s(f" - {ai_summary}")
         notes.append(f"{file} - {ai_summary}")
+        input_to_model.append(
+            {
+                "content": ai_summary,
+                "role": ASSISTANT,
+            }
+        )
 
         time.sleep(4)
         
@@ -427,12 +435,12 @@ summary of the repo and start helping them with their questions.
     print_s()
     note_file = "\n".join(notes)
     prompt = f"{note_file} \n\n Now summarize the repo for the user"
-    input_to_model = [
+    input_to_model.append(
         {
             "content": prompt,
             "role": SYSTEM if API == OPEN_AI else USER,
         }
-    ]
+    )
     print_s("Summarizing...")
     outputs, error = call_api(input_to_model, include_functions=False)
     message = None
@@ -902,7 +910,7 @@ def update_notes_and_shrink_history():
         print_s(f"{output_color}Summarizing a few older messages in conversation to save on tokens...{ANSII_RESET}")
         input_to_model.append(
             {
-                "content": f"SYSTEM: We're about to drop the last {CONVERSATION_SUMMARY_RATE} messages in this conversation. Please output an update to your notes with any important information. Your notes:\n{notes}",
+                "content": f"SYSTEM: We're about to drop the last {CONVERSATION_SUMMARY_RATE} messages in this conversation. Please output an update to your notes including any important information from older messages that might be lost. Your notes:\n{notes}",
                 "role": SYSTEM if API == OPEN_AI else USER,
             }
         )
@@ -1084,9 +1092,6 @@ def auto_mode_loop(max_attempts=100):
                     print_s(f"{model_color}{name} {json.dumps(args)[:64]}... {tool_use_id}{ANSII_RESET}")
                     print_s()
                     handle_function_call(name, args, tool_use_id, output)
-
-                    # update conversaion summary if conversation is getting long
-                    update_notes_and_shrink_history()
         else:
             message = outputs
             print_and_save_ai_message_to_history(message, error)
