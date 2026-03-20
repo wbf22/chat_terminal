@@ -79,6 +79,7 @@ output_color = color_code(82, 82, 82)
 error_color = color_code(200, 0, 0)
 
 FILE_PATH = 'chat.md'
+MEMORY_FILE_PATH = 'chat.json'
 ASSISTANT = 'assistant'
 USER = 'user'
 SYSTEM = 'system'
@@ -174,6 +175,13 @@ def write_history(history):
     with open(FILE_PATH, 'w') as file:
         file.write("".join(history))
         file.write("\n")
+
+using_memory = False
+def load_memory():
+    pass
+
+def write_memory():
+    pass
 
 auto_prompt = ""
 actions = 0
@@ -1113,13 +1121,25 @@ def auto_mode_loop(max_attempts=100):
 
 
 # START
+
+# set up model functions based on api
 define_model_functions()
+
+# set first note message in input
 input_to_model.append(
     {
         "content": f"Your notes:\n{notes}",
         "role": SYSTEM if API == OPEN_AI else USER,
     }
 )
+
+# initialize memory
+p = Path(MEMORY_FILE_PATH)
+if p.exists():
+    print_s(f"{output_color}Using {MEMORY_FILE_PATH}{ANSII_RESET}")
+else:
+    using_memory = input("Use memory")
+
 while(True):
     
     # loop
