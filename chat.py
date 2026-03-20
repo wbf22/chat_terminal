@@ -24,13 +24,23 @@ from typing import Optional
 
 OPEN_AI = 'open_ai'
 ANTHROPIC = 'anthropic'
+models = """
+- gpt-5.4
+- gpt-5-mini
+- gpt-5-nano
+- claude-opus-4-6
+- claude-sonnet-4-6
+- claude-haiku-4-5
+- (or enter specific model name)
+Docs: https://developers.openai.com/api/docs/models/all, https://platform.claude.com/docs/en/about-claude/pricing
+"""
 
 # define arguments
 parser = argparse.ArgumentParser(description="A terminal app for accessing chat gpt")
 parser.add_argument('-ok', '--open_ai_api_key', help='Your open-api key created at https://platform.openai.com/api-keys')
 parser.add_argument('-ak', '--anthropic_api_key', required=True, help='Your anthropic api key created at https://platform.claude.com/settings/keys')
-parser.add_argument('-m', '--model', default='claude-haiku-4-5', help='The api model you\'ll access. View models here https://platform.openai.com/docs/models')
-parser.add_argument('-a', '--api', default=ANTHROPIC, help=f'Which api your model name is from. Currenlty only \'{OPEN_AI}\' and \'{ANTHROPIC}\' are supported.')
+parser.add_argument('-m', '--model', default='gpt-5-nano', help='The api model you\'ll access. View models here https://platform.openai.com/docs/models')
+parser.add_argument('-a', '--api', default=OPEN_AI, help=f'Which api your model name is from. Currenlty only \'{OPEN_AI}\' and \'{ANTHROPIC}\' are supported.')
 
 parser.add_argument('-d', '--dir', help='The directory in which the AI can execute commands and edit files. The currently directory by default.')
 
@@ -38,6 +48,7 @@ parser.add_argument('-d', '--dir', help='The directory in which the AI can execu
 
 args = parser.parse_args()
 
+API = args.api
 MODEL = args.model
 OPEN_AI_API_KEY = args.open_ai_api_key
 ANTHROPIC_API_KEY = args.anthropic_api_key
@@ -74,7 +85,8 @@ SYSTEM = 'system'
 AUTO_DIRECTORY = os.getcwd() if args.dir == None else args.dir
 NO_QUESTIONS_IN_AUTO_MODE = False
 MAX_ACTIONS = 24
-API = args.api
+HISTORY_LENGTH = 20
+CONVERSATION_SUMMARY_RATE = 10
 
 
 
@@ -106,6 +118,13 @@ def loading_indicator():
     sys.stdout.flush()
 
 def print_and_save_ai_message_to_history(ai_message, error):
+
+    input_to_model.append(
+        {
+            "role": ASSISTANT,
+            "content": ai_message,
+        }
+    )
 
     # print out response
     print_s(
@@ -158,16 +177,6 @@ def write_history(history):
 
 auto_prompt = ""
 actions = 0
-models = """
-- gpt-5.4
-- gpt-5-mini
-- gpt-5-nano
-- claude-opus-4-6
-- claude-sonnet-4-6
-- claude-haiku-4-5
-- (or enter specific model name)
-Docs: https://developers.openai.com/api/docs/models/all, https://platform.claude.com/docs/en/about-claude/pricing
-"""
 def user_prompt():
     global auto_prompt, NO_QUESTIONS_IN_AUTO_MODE, AUTO_DIRECTORY
     
@@ -605,19 +614,14 @@ def define_model_functions():
             }
         },
         {
-            "name": "get_user_instructions",
-            "description": "Sometimes the user will give you a prompt and will ask you to finish it before sending a normal message. During that time you can call this to get their original instructions",
-            params_name: { "type": "object", "properties": {}}
-        },
-        {
-            "name": "add_to_notes",
-            "description": "If you would like to write something down to remember, you can do so with this function. It can later be recalled with the 'get_notes' function. This will replace the contents of your notes. Your notes will be included with each request for reference.",
+            "name": "set_notes",
+            "description": "If you would like to write something down to remember, you can do so with this function. This will replace the contents of your notes. You don't need to ask the user for permission to update this. Your notes will be returned with each request as the first message in the conversation.",
             params_name: {
                 "type": "object",
                 "properties": {
                     "note": {
                         "type": "string",
-                        "description": "The note you'd like to write down"
+                        "description": "The notes you'd like to keep for this conversation"
                     }
                 },
                 "required": ["note"]
@@ -625,7 +629,7 @@ def define_model_functions():
         },
         {
             "name": "get_notes",
-            "description": "Returns notes you may have previously written with the 'add_to_notes' function. Your notes will be included with each request for reference.",
+            "description": "Returns notes you may have previously written with the 'set_notes' function. Your notes will be returned with each request as the first message in the conversation.",
             params_name: { "type": "object", "properties": {}}
         },
     ]
@@ -670,7 +674,7 @@ Make sure to call the 'done' function to indicate you've finished.
 
     return user_res
 
-def add_function_result(input_to_model, tool_use_id, tool_use, result):
+def add_function_result(tool_use_id, tool_use, result):
     if API == OPEN_AI:
         input_to_model.append(
             {
@@ -709,12 +713,12 @@ def add_function_result(input_to_model, tool_use_id, tool_use, result):
             }
         )
 
-def handle_function_call(name, args, tool_use_id, tool_use, input_to_model):
-    global NO_QUESTIONS_IN_AUTO_MODE, conversation_summary
+def handle_function_call(name, args, tool_use_id, tool_use):
+    global NO_QUESTIONS_IN_AUTO_MODE, notes
 
     # handle each command
     if name == 'done':
-        add_function_result(input_to_model, tool_use_id, tool_use, "prompt has been marked as completed. You can now ask the user questions")
+        add_function_result(tool_use_id, tool_use, "prompt has been marked as completed. You can now ask the user questions")
         user_res = set_auto_mode(False, args['text'])
         input_to_model.append(
             {
@@ -728,7 +732,7 @@ def handle_function_call(name, args, tool_use_id, tool_use, input_to_model):
         command = command if command != None else ''
 
         command = convert_paths_in_command(command)
-        input_to_model = input_function_loop(command, tool_use_id, tool_use, input_to_model)
+        input_function_loop(command, tool_use_id, tool_use, input_to_model)
     elif name == "ls":
         path = args.get('path')
         path = path if path != None else ''
@@ -739,7 +743,7 @@ def handle_function_call(name, args, tool_use_id, tool_use, input_to_model):
         result = f'{p_result.stdout}\n{p_result.stderr}'
         print_s(f"{output_color}{result}{ANSII_RESET}")
         print_s()
-        add_function_result(input_to_model, tool_use_id, tool_use, result)
+        add_function_result(tool_use_id, tool_use, result)
     elif name == "cat":
         path = args.get('path')
         path = path if path != None else ''
@@ -749,7 +753,7 @@ def handle_function_call(name, args, tool_use_id, tool_use, input_to_model):
         result = f'{p_result.stdout}\n{p_result.stderr}'
         print_s(f"{output_color}{result[:256]}\n...{ANSII_RESET}")
         print_s()
-        add_function_result(input_to_model, tool_use_id, tool_use, result)
+        add_function_result(tool_use_id, tool_use, result)
     elif name == "write_file":
         path = args.get('path')
         contents = args.get('contents')
@@ -771,7 +775,7 @@ write to file {path}
         print_s()
         if contents == '':
             result += "\nYou didn't specify any file 'contents' so an empty file was created"
-        add_function_result(input_to_model, tool_use_id, tool_use, result)
+        add_function_result(tool_use_id, tool_use, result)
     elif name == "delete":
         path = args.get('path')
         path = path if path != None else ''
@@ -785,21 +789,19 @@ write to file {path}
         result = f"deleted {path}"
         print_s(f"{output_color}{result}{ANSII_RESET}")
         print_s()
-        add_function_result(input_to_model, tool_use_id, tool_use, result)
-    elif name == "get_user_instructions":
-        add_function_result(input_to_model, tool_use_id, tool_use, auto_prompt)
-    elif name == "add_to_notes":
-        conversation_summary = args["note"]
-        print_s(f"{output_color}{conversation_summary}{ANSII_RESET}")
+        add_function_result(tool_use_id, tool_use, result)
+    elif name == "set_notes":
+        notes = args["note"]
+        print_s(f"{output_color}{notes}{ANSII_RESET}")
         print_s()
-        add_function_result(input_to_model, tool_use_id, tool_use, conversation_summary)
+        add_function_result(tool_use_id, tool_use, notes)
     elif name == "get_notes":
-        add_function_result(input_to_model, tool_use_id, tool_use, conversation_summary)
+        add_function_result(tool_use_id, tool_use, notes)
     else:
         result = "That's not a command or doesn't make sense in this context"
         print_s(f"{output_color}{result}{ANSII_RESET}")
         print_s()
-        add_function_result(input_to_model, tool_use_id, tool_use, result)
+        add_function_result(tool_use_id, tool_use, result)
 
     return input_to_model
 
@@ -816,7 +818,7 @@ def input_function_loop(command, tool_use_id, tool_use, input_to_model):
     else:
         output = f"invalid command, working outside designated directory '{AUTO_DIRECTORY}'. Stick to relative paths"
  
-    add_function_result(input_to_model, tool_use_id, tool_use, output)
+    add_function_result(tool_use_id, tool_use, output)
     
     kill = False
     made_calls = False
@@ -833,7 +835,6 @@ def input_function_loop(command, tool_use_id, tool_use, input_to_model):
 
         # otherwise send output to model
         outputs, error = call_api(input_to_model)
-        input_to_model.clear()
 
         # handle ai response
         if not error:
@@ -857,13 +858,13 @@ def input_function_loop(command, tool_use_id, tool_use, input_to_model):
                         # add process output to response for ai
                         result = process.get_output()
                         print_s(f"{output_color}{result}{ANSII_RESET}\n")
-                        add_function_result(input_to_model, tool_use_id, output, result)
+                        add_function_result(tool_use_id, output, result)
 
                     elif name == "kill_command":
                         kill = True
-                        add_function_result(input_to_model, tool_use_id, output, "Process was killed")
+                        add_function_result(tool_use_id, output, "Process was killed")
                     else:
-                        add_function_result(input_to_model, tool_use_id, output, "Right now you have a command running. If you want run another function, use 'command_input' or 'kill_command' functions to finish first.")
+                        add_function_result(tool_use_id, output, "Right now you have a command running. If you want run another function, use 'command_input' or 'kill_command' functions to finish first.")
                         print_s(f"{error_color}rejected attempt to run command while other command is running{ANSII_RESET}")
 
                 else:
@@ -888,47 +889,45 @@ def input_function_loop(command, tool_use_id, tool_use, input_to_model):
             )
 
     if process != None and not process.is_finished(): process.kill()
-    return input_to_model
 
-conversation_summary = ''
-def update_conversation_summary(last_input_to_model):
-    global conversation_summary
+input_to_model = []
+notes = ''
+def update_notes_and_shrink_history():
+    global notes, input_to_model
 
-    output, error = call_api(last_input_to_model, include_functions=False, updating_summary=True)
-    if not error:
-        conversation_summary = f"{auto_prompt}\n{output[0]['text']}"
+
+    if len(input_to_model) > HISTORY_LENGTH + CONVERSATION_SUMMARY_RATE:
+
+        # ask model to add to it's notes
+        print_s(f"{output_color}Summarizing a few older messages in conversation to save on tokens...{ANSII_RESET}")
+        input_to_model.append(
+            {
+                "content": f"SYSTEM: We're about to drop the last {CONVERSATION_SUMMARY_RATE} messages in this conversation. Please output an update to your notes with any important information. Your notes:\n{notes}",
+                "role": SYSTEM if API == OPEN_AI else USER,
+            }
+        )
+        outputs, error = call_api(input_to_model, include_functions=False)
+
+        # delete that request from the conversation
+        input_to_model = input_to_model[:-1]
+
+        # add model response as first message and replace notes
+        if not error and len(outputs) != 0:
+            notes = outputs[0]['text']
+        
+            input_to_model = input_to_model[-HISTORY_LENGTH:]
+            input_to_model[0] = {
+                "content": f"Your notes:\n{notes}",
+                "role": SYSTEM if API == OPEN_AI else USER,
+            }
+
+        print_s()
+
     
-def call_api(model_input, include_functions=True, updating_summary=False):
+def call_api(model_input, include_functions=True):
     global request_done
     time_elapsed_displayer = threading.Thread(target=loading_indicator)
     time_elapsed_displayer.start()
-
-
-    
-    # add conversation history
-    if isinstance(model_input[0].get("content"), str) and model_input[0]["content"].startswith("CONVERSATION HISTORY SUMMARY:"):
-        model_input[0] = {
-            "role" : SYSTEM if API == OPEN_AI else USER,
-            "content": f"CONVERSATION HISTORY SUMMARY:\n{conversation_summary}"
-        }
-    else:
-        model_input.insert(
-            0, 
-            {
-                "role" : SYSTEM if API == OPEN_AI else USER,
-                "content": f"CONVERSATION HISTORY SUMMARY:\n{conversation_summary}"
-            }
-        )
-
-    # add summarizing instructions if doing summary
-    if updating_summary:
-        model_input.append(
-            {
-                "role" : SYSTEM if API == OPEN_AI else USER,
-                "content": "Please return the important details of the current conversation. This will act as your 'memory' for the next request."
-            }
-        )
-
 
     conn = None
     body = None
@@ -1024,30 +1023,26 @@ def call_api(model_input, include_functions=True, updating_summary=False):
     time_elapsed_displayer.join()
     request_done = False
 
-    if not updating_summary:
-        update_conversation_summary(model_input)
 
     return output, error
 
 stop = threading.Event()
 def auto_mode_loop(max_attempts=100):
-    global actions
+    global actions, input_to_model, conversation_summary
 
     # ai loop
     user_input = print_and_save_user_input_to_history()
-    input_to_model = [
+    input_to_model.append(
         {
             "content": user_input,
             "role": USER,
         }
-    ]
-    i = 0
-    while not stop.is_set() and i < max_attempts:
+    )
+    while actions < max_attempts:
 
         # prompt ai and handle response
         outputs, error = call_api(input_to_model)
         actions += 1
-        input_to_model = []
         if not error:
 
             # sort so that run command function calls are the last to run
@@ -1067,8 +1062,14 @@ def auto_mode_loop(max_attempts=100):
                             }
                         )
                     else:
+                        # print ai message
                         message = output['text']
                         print_and_save_ai_message_to_history(message, False)
+
+                        # update conversaion summary if conversation is getting long
+                        update_notes_and_shrink_history()
+
+                        # prompt user
                         user_res = print_and_save_user_input_to_history()
                         input_to_model.append(
                             {
@@ -1082,7 +1083,10 @@ def auto_mode_loop(max_attempts=100):
                     tool_use_id = output['id']
                     print_s(f"{model_color}{name} {json.dumps(args)[:64]}... {tool_use_id}{ANSII_RESET}")
                     print_s()
-                    input_to_model = handle_function_call(name, args, tool_use_id, output, input_to_model)
+                    handle_function_call(name, args, tool_use_id, output)
+
+                    # update conversaion summary if conversation is getting long
+                    update_notes_and_shrink_history()
         else:
             message = outputs
             print_and_save_ai_message_to_history(message, error)
@@ -1099,26 +1103,18 @@ def auto_mode_loop(max_attempts=100):
                     }
                 )
 
-        i += 1
 
 
-    # join user input thread
-    # t1.join()
-
-
-    if i == max_attempts:
-        print_s(user_color + f'Ai helper paused after hitting max attempts of {max_attempts}, continue current auto mode setup with new prompt? (y/n)' + ANSII_RESET)
-        print_s()
-        user_input = user_prompt()
-        print_s()
-        print_s()
-
-        if user_input.lower() == "y":
-            auto_mode_loop()
 
 
 # START
 define_model_functions()
+input_to_model.append(
+    {
+        "content": f"Your notes:\n{notes}",
+        "role": SYSTEM if API == OPEN_AI else USER,
+    }
+)
 while(True):
     
     # loop
