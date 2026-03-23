@@ -227,7 +227,7 @@ def promp_ai_for_memory():
 auto_prompt = ""
 actions = 0
 def user_prompt():
-    global auto_prompt, NO_QUESTIONS_IN_AUTO_MODE, AUTO_DIRECTORY, input_to_model, memory
+    global auto_prompt, NO_QUESTIONS_IN_AUTO_MODE, AUTO_DIRECTORY, input_to_model, memory, using_memory
     
     user_input = input()
 
@@ -254,8 +254,9 @@ def user_prompt():
         user_input = content[last_message_start+37:]
         print_s(user_input)
     elif user_input.strip() == 'quit' or user_input == 'q':
-        promp_ai_for_memory()
-        write_memory()
+        if using_memory and len(input_to_model) > 1:
+            promp_ai_for_memory()
+            write_memory()
         exit(0)
     elif user_input.strip() == "save":
         print_s()
@@ -1000,7 +1001,8 @@ input_to_model = []
 notes = ''
 def add_memory_to_notes():
     global notes
-    notes = f"Your notes:\n{notes}\n\nLong term memories:\n{"\n".join(memory)}"
+    mems = '\n'.join(memory)
+    notes = f"Your notes:\n{notes}\n\nLong term memories:\n{mems}"
 
 
 def prompt_ai_to_update_notes_and_shrink_history():
