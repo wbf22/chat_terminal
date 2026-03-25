@@ -82,7 +82,6 @@ FILE_PATH = 'chat.md'
 MEMORY_FILE_PATH = 'chat.json'
 ASSISTANT = 'assistant'
 USER = 'user'
-SYSTEM = 'system'
 AUTO_DIRECTORY = os.getcwd() if args.dir == None else args.dir
 NO_QUESTIONS_IN_AUTO_MODE = False
 MAX_ACTIONS = 24
@@ -210,7 +209,7 @@ def promp_ai_for_memory():
     input_to_model.append(
         {
             "content": f"SYSTEM: The user has requested you make a memory of the current conversation to be saved for your reference. Please describe the most important points of this conversation in a one line summary.",
-            "role": SYSTEM if API == OPEN_AI else USER,
+            "role": USER,
         }
     )
     outputs, error = call_api(input_to_model, include_functions=False)
@@ -227,7 +226,7 @@ def promp_ai_for_memory():
 auto_prompt = ""
 actions = 0
 def user_prompt():
-    global auto_prompt, NO_QUESTIONS_IN_AUTO_MODE, AUTO_DIRECTORY, input_to_model, memory, using_memory
+    global auto_prompt, NO_QUESTIONS_IN_AUTO_MODE, AUTO_DIRECTORY, input_to_model, memory, using_memory, API, MODEL
     
     user_input = input()
 
@@ -471,7 +470,7 @@ summary of the repo and start helping them with their questions.
     input_to_model.append(
         {
             "content": prompt,
-            "role": SYSTEM if API == OPEN_AI else USER,
+            "role": USER,
         }
     )
     call_api(input_to_model, include_functions=False)
@@ -501,7 +500,7 @@ summary of the repo and start helping them with their questions.
         input_to_model.append(
             {
                 "content": prompt,
-                "role": SYSTEM if API == OPEN_AI else USER,
+                "role": USER,
             }
         )
         outputs, error = call_api(input_to_model, include_functions=False)
@@ -532,7 +531,7 @@ summary of the repo and start helping them with their questions.
     input_to_model.append(
         {
             "content": prompt,
-            "role": SYSTEM if API == OPEN_AI else USER,
+            "role": USER,
         }
     )
     print_s("Summarizing...")
@@ -979,7 +978,7 @@ def input_function_loop(command, tool_use_id, tool_use, input_to_model):
                     input_to_model.append(
                         {
                             "content": msg,
-                            "role": SYSTEM if API == OPEN_AI else USER,
+                            "role": USER,
                         }
                     )
                     print_s(f"{error_color}rejected message since ai is running a command currently{ANSII_RESET}")
@@ -991,7 +990,7 @@ def input_function_loop(command, tool_use_id, tool_use, input_to_model):
             input_to_model.append(
                 {
                     "content": outputs,
-                    "role": SYSTEM if API == OPEN_AI else USER,
+                    "role": USER,
                 }
             )
 
@@ -1016,7 +1015,7 @@ def prompt_ai_to_update_notes_and_shrink_history():
         input_to_model.append(
             {
                 "content": f"SYSTEM: We're about to drop the last {CONVERSATION_SUMMARY_RATE} messages in this conversation. Please output an update to your notes including any important information from older messages that might be lost. Your notes:\n{notes}",
-                "role": SYSTEM if API == OPEN_AI else USER,
+                "role": USER,
             }
         )
         outputs, error = call_api(input_to_model, include_functions=False)
@@ -1032,7 +1031,7 @@ def prompt_ai_to_update_notes_and_shrink_history():
             input_to_model = input_to_model[-HISTORY_LENGTH:]
             input_to_model[0] = {
                 "content": notes,
-                "role": SYSTEM if API == OPEN_AI else USER,
+                "role": USER,
             }
 
         print_s()
@@ -1172,7 +1171,7 @@ def auto_mode_loop(max_attempts=100):
                         input_to_model.append(
                             {
                                 "content": "The user has asked you complete this prompt without asking questions. Just complete the prompt with your best guess on the users' intentions and call the 'done' function when finished.",
-                                "role": SYSTEM if API == OPEN_AI else USER,
+                                "role": USER,
                             }
                         )
                     else:
@@ -1237,7 +1236,7 @@ if p.exists():
 input_to_model.append(
     {
         "content": notes,
-        "role": SYSTEM if API == OPEN_AI else USER,
+        "role": USER,
     }
 )
 
