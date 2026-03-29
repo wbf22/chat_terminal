@@ -24,16 +24,14 @@ from typing import Optional
 
 OPEN_AI = 'open_ai'
 ANTHROPIC = 'anthropic'
-models = """
-- gpt-5.4
-- gpt-5-mini
-- gpt-5-nano
-- claude-opus-4-6
-- claude-sonnet-4-6
-- claude-haiku-4-5
-- (or enter specific model name)
-Docs: https://developers.openai.com/api/docs/models/all, https://platform.claude.com/docs/en/about-claude/pricing
-"""
+models = [
+    "gpt-5.4",
+    "gpt-5-mini",
+    "gpt-5-nano",
+    "claude-opus-4-6",
+    "claude-sonnet-4-6",
+    "claude-haiku-4-5"
+]
 
 # define arguments
 parser = argparse.ArgumentParser(description="A terminal app for accessing chat gpt")
@@ -314,16 +312,30 @@ def user_prompt():
     elif user_input.strip() == "model":
         print_s()
         print_s(f"{assistant_color}CHANGE MODEL{ANSII_RESET}\n")
-        print_s(f"{model_color}api:\n[0] {OPEN_AI} (chatgpt)\n[1] {ANTHROPIC} (cluade)\n{ANSII_RESET}")
-        api = input()
-        if api == "1":
-            API = ANTHROPIC
-        else:
-            API = OPEN_AI
+        models_list = []
+        for i, model in enumerate(models):
+            models_list.append(f"[{i}] {model}")
+        models_list.append("""
+(or enter specific model name)
+Docs: https://developers.openai.com/api/docs/models/all, https://platform.claude.com/docs/en/about-claude/pricing
+""")
+        print_s(f"{assistant_color}{"\n".join(models_list)}{ANSII_RESET}")
+        model = input()
+        try:
+            ind = int(model)
+            MODEL = models[ind]
+            API = OPEN_AI if ind < 3 else ANTHROPIC
+        except ValueError:
+            MODEL = model
+            print_s(f"{model_color}api:\n[0] {OPEN_AI} (chatgpt)\n[1] {ANTHROPIC} (cluade)\n{ANSII_RESET}")
+            api = input()
+            if api == "1":
+                API = ANTHROPIC
+            else:
+                API = OPEN_AI
 
-        print_s()
-        print_s(f"{assistant_color}model name:\n{models}{ANSII_RESET}")
-        MODEL = input()
+            print_s()
+
 
         print_s()
         print_s(f"{assistant_color}using {MODEL} on {API}{ANSII_RESET}\n")
