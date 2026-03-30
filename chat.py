@@ -84,7 +84,7 @@ AUTO_DIRECTORY = os.getcwd() if args.dir == None else args.dir
 NO_QUESTIONS_IN_AUTO_MODE = False
 MAX_ACTIONS = 24
 HISTORY_LENGTH = 10
-CONVERSATION_SUMMARY_RATE = 10
+CONVERSATION_SUMMARY_RATE = 2
 
 
 
@@ -176,7 +176,7 @@ def write_history(history):
 using_memory = False
 memory = []
 def load_memory():
-    global memory
+    global memory, input_to_model
     with open(MEMORY_FILE_PATH, 'r') as file:
         content = file.read()
         try:
@@ -184,20 +184,33 @@ def load_memory():
         except ValueError as e:
             print_s(f"{error_color}Error loading memories from {MEMORY_FILE_PATH}:\n{e}")
 
-def write_memory():
-    global memory
+        mems = '\n'.join(memory)
+        input_to_model[0] = {
+            "content": f"Memories (conversation notes):\n{mems}",
+            "role": ASSISTANT,
+        }
 
-    if using_memory:
-        # limit the size of memory to a few hundred memories
-        memory = memory[:100]
+def add_and_write_memory(new_mem):
+    global memory, input_to_model
+
+    if using_memory and len(memory) > 0:
+        if new_mem is not None:
+            memory.append(new_mem)
+
+        # limit the size of memory to a few hundred memories, saving the first memory which can potentially be the latest repo summary
+        first_memory = memory[0]
+        memory = [first_memory] + memory[1:100]
 
         # write to file
         json_str = json.dumps(memory, indent=4)
         with open(MEMORY_FILE_PATH, 'w') as file:
             file.write(json_str)
 
-        # add to notes sent with each request
-        add_memory_to_notes()
+        mems = '\n'.join(memory)
+        input_to_model[0] = {
+            "content": f"Memories (conversation notes):\n{mems}",
+            "role": ASSISTANT,
+        }
 
 def promp_ai_for_memory():
     global input_to_model
@@ -206,20 +219,23 @@ def promp_ai_for_memory():
     print_s(f"{output_color}having ai store memory for conversation{ANSII_RESET}\n")
     input_to_model.append(
         {
-            "content": f"SYSTEM: The user has requested you make a memory of the current conversation to be saved for your reference. Please describe the most important points of this conversation in a one line summary.",
+            "content": f"SYSTEM: The user has requested you make a memory of the current conversation to be saved for your reference. Please output the most important things for you to remember in a one line summary.",
             "role": USER,
         }
     )
     outputs, error = call_api(input_to_model, include_functions=False)
     input_to_model = input_to_model[:-1]
+    new_mem = ''
     if not error:
         new_mem = outputs[0]['text']
         print_s(f"{assistant_color}New memory:\n {new_mem}{ANSII_RESET}")
-        memory.append(new_mem)
+        
     else:
         print_s(f"{error_color} Error: {outputs}{ANSII_RESET}")
     
     print_s()
+
+    return new_mem
 
 auto_prompt = ""
 actions = 0
@@ -252,8 +268,8 @@ def user_prompt():
         print_s(user_input)
     elif user_input.strip() == 'quit' or user_input == 'q':
         if using_memory and len(input_to_model) > 1:
-            promp_ai_for_memory()
-            write_memory()
+            new_mem = promp_ai_for_memory()
+            add_and_write_memory(new_mem)
         exit(0)
     elif user_input.strip() == "save":
         print_s()
@@ -319,7 +335,8 @@ def user_prompt():
 (or enter specific model name)
 Docs: https://developers.openai.com/api/docs/models/all, https://platform.claude.com/docs/en/about-claude/pricing
 """)
-        print_s(f"{assistant_color}{"\n".join(models_list)}{ANSII_RESET}")
+        models_str = "\n".join(models_list)
+        print_s(f"{assistant_color}{models_str}{ANSII_RESET}")
         model = input()
         try:
             ind = int(model)
@@ -354,13 +371,13 @@ Docs: https://developers.openai.com/api/docs/models/all, https://platform.claude
         print_s(f"{assistant_color}SAVE MEMORY{ANSII_RESET}\n")
         print_s(f"{model_color}[0] have model save memory of what is currently going on \n[1] manually enter something for the AI to remember\n[2] list existing memories \n[3] cancel \n{ANSII_RESET}")
         choice = input()
+        new_mem = None
         if choice == "0":
-            promp_ai_for_memory()
+            new_mem = promp_ai_for_memory()
         elif choice == "1":
             print_s(f"{assistant_color}enter custom memory:\n{ANSII_RESET}")
             new_mem = input()
             print_s(f"{assistant_color}New memory:\n {new_mem}{ANSII_RESET}")
-            memory.append(new_mem)
         elif choice == "2":
             for i, mem in enumerate(memory):
                 print_s(f"[{i}] - {output_color}{mem}{ANSII_RESET}")
@@ -387,7 +404,7 @@ Docs: https://developers.openai.com/api/docs/models/all, https://platform.claude
 
         if choice != '3':
             using_memory = True
-            write_memory()
+            add_and_write_memory(new_mem)
         
         print_s()
         user_input = ''
@@ -453,7 +470,7 @@ def is_command_in_directory(command: str) -> bool:
     return True
 
 def summarize_repo(directories: list[str], exclude: list[str]):
-    global input_to_model, memory
+    global input_to_model, memory, using_memory
 
     MAX_FILE_SIZE_BYTES = 500 * 1000
 
@@ -487,6 +504,7 @@ summary of the repo and start helping them with their questions.
     )
     call_api(input_to_model, include_functions=False)
 
+    start_index = len(input_to_model)
     notes = []
     i = 0
     for file in all_files:
@@ -523,18 +541,22 @@ summary of the repo and start helping them with their questions.
             time.sleep(30)
             tries += 1
 
-        output = outputs[0]
-        ai_summary = output['text'].replace("\n", " ")
-        print_s(f" - {ai_summary}")
-        notes.append(f"{file} - {ai_summary}")
-        input_to_model.append(
-            {
-                "content": ai_summary,
-                "role": ASSISTANT,
-            }
-        )
+        if not error:
+            output = outputs[0]
+            ai_summary = output['text'].replace("\n", " ")
+            print_s(f" - {ai_summary}")
+            notes.append(f"{file} - {ai_summary}")
+            input_to_model.append(
+                {
+                    "content": ai_summary,
+                    "role": ASSISTANT,
+                }
+            )
 
         time.sleep(4)
+
+        if len(input_to_model) > start_index + CONVERSATION_SUMMARY_RATE:
+            input_to_model = input_to_model[:start_index] + input_to_model[-int(CONVERSATION_SUMMARY_RATE/2):]
         
 
     print_s()
@@ -556,8 +578,9 @@ summary of the repo and start helping them with their questions.
     print_and_save_ai_message_to_history(message, error)
 
     # save as memory
-    memory.append(message)
-    write_memory()
+    using_memory = True
+    memory.insert(0, message)
+    add_and_write_memory(None)
     
 
 def check_for_max_actions():
@@ -732,24 +755,19 @@ def define_model_functions():
             }
         },
         {
-            "name": "set_notes",
-            "description": "If you would like to write something down to remember, you can do so with this function. This will replace the contents of your notes. You don't need to ask the user for permission to update this. Your notes will be returned with each request as the first message in the conversation.",
+            "name": "add_memory",
+            "description": "If you would like to write something down to remember, you can do so with this function. Your memories will be returned to you with each request.",
             params_name: {
                 "type": "object",
                 "properties": {
-                    "note": {
+                    "memory": {
                         "type": "string",
-                        "description": "The notes you'd like to keep for this conversation"
+                        "description": "What you'd like to remember"
                     }
                 },
-                "required": ["note"]
+                "required": ["memory"]
             }
-        },
-        {
-            "name": "get_notes",
-            "description": "Returns notes you may have previously written with the 'set_notes' function. Your notes will be returned with each request as the first message in the conversation.",
-            params_name: { "type": "object", "properties": {}}
-        },
+        }
     ]
 
     if API == OPEN_AI:
@@ -832,7 +850,7 @@ def add_function_result(tool_use_id, tool_use, result):
         )
 
 def handle_function_call(name, args, tool_use_id, tool_use):
-    global NO_QUESTIONS_IN_AUTO_MODE, notes
+    global NO_QUESTIONS_IN_AUTO_MODE, memory
 
     # handle each command
     if name == 'done':
@@ -908,13 +926,12 @@ write to file {path}
         print_s(f"{output_color}{result}{ANSII_RESET}")
         print_s()
         add_function_result(tool_use_id, tool_use, result)
-    elif name == "set_notes":
-        notes = args["note"]
-        print_s(f"{output_color}{notes}{ANSII_RESET}")
+    elif name == "add_memory":
+        mem = args["memory"]
+        add_and_write_memory(mem)
+        print_s(f"{output_color}{mem}{ANSII_RESET}")
         print_s()
-        add_function_result(tool_use_id, tool_use, notes)
-    elif name == "get_notes":
-        add_function_result(tool_use_id, tool_use, notes)
+        add_function_result(tool_use_id, tool_use, mem)
     else:
         result = "That's not a command or doesn't make sense in this context"
         print_s(f"{output_color}{result}{ANSII_RESET}")
@@ -1009,15 +1026,9 @@ def input_function_loop(command, tool_use_id, tool_use, input_to_model):
     if process != None and not process.is_finished(): process.kill()
 
 input_to_model = []
-notes = ''
-def add_memory_to_notes():
-    global notes
-    mems = '\n'.join(memory)
-    notes = f"Your notes:\n{notes}\n\nLong term memories:\n{mems}"
-
 
 def prompt_ai_to_update_notes_and_shrink_history():
-    global notes, input_to_model
+    global input_to_model
 
 
     if len(input_to_model) > HISTORY_LENGTH + CONVERSATION_SUMMARY_RATE:
@@ -1026,7 +1037,7 @@ def prompt_ai_to_update_notes_and_shrink_history():
         print_s(f"{output_color}Summarizing a few older messages in conversation to save on tokens...{ANSII_RESET}")
         input_to_model.append(
             {
-                "content": f"SYSTEM: We're about to drop the last {CONVERSATION_SUMMARY_RATE} messages in this conversation. Please output an update to your notes including any important information from older messages that might be lost. Your notes:\n{notes}",
+                "content": f"SYSTEM: We're about to drop the last {CONVERSATION_SUMMARY_RATE} messages in this conversation. Please output any important information from older messages that might be lost.",
                 "role": USER,
             }
         )
@@ -1035,16 +1046,12 @@ def prompt_ai_to_update_notes_and_shrink_history():
         # delete that request from the conversation
         input_to_model = input_to_model[:-1]
 
-        # add model response as first message and replace notes
+        # add model response as first message along with memories
         if not error and len(outputs) != 0:
-            notes = outputs[0]['text']
-            add_memory_to_notes()
+            summary = outputs[0]['text']
         
             input_to_model = input_to_model[-HISTORY_LENGTH:]
-            input_to_model[0] = {
-                "content": notes,
-                "role": USER,
-            }
+            add_and_write_memory(summary)
 
         print_s()
 
@@ -1234,6 +1241,13 @@ def auto_mode_loop(max_attempts=100):
 # set up model functions based on api
 define_model_functions()
 
+# set first empty message in input which can be replace by memories
+input_to_model.append(
+    {
+        "content": '',
+        "role": USER,
+    }
+)
 
 # initialize memory
 p = Path(MEMORY_FILE_PATH)
@@ -1241,16 +1255,8 @@ if p.exists():
     print_s(f"{output_color}Using {MEMORY_FILE_PATH} for memory{ANSII_RESET}")
     using_memory = True
     load_memory()
-    add_memory_to_notes()
 
 
-# set first note message in input
-input_to_model.append(
-    {
-        "content": notes,
-        "role": USER,
-    }
-)
 
 while(True):
     
