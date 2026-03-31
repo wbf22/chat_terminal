@@ -1220,6 +1220,16 @@ def auto_mode_loop(max_attempts=100):
             message = outputs
             print_and_save_ai_message_to_history(message, error)
 
+            # prompt user
+            user_res = print_and_save_user_input_to_history()
+            input_to_model.append(
+                {
+                    "content": user_res,
+                    "role": USER,
+                }
+            )
+
+
         # ask for prompt to continue after max attempts
         if NO_QUESTIONS_IN_AUTO_MODE:
             should_continue = check_for_max_actions()
