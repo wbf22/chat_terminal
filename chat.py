@@ -1197,10 +1197,6 @@ def auto_mode_loop(max_attempts=100):
 
         # prompt ai and handle response
         outputs, error = call_api(input_to_model)
-        
-        with open("claude.json", 'w') as file:
-            file.write(json.dumps(input_to_model, indent=4))
-
         actions += 1
         if not error:
 
