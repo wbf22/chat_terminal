@@ -408,6 +408,16 @@ Docs: https://developers.openai.com/api/docs/models/all, https://platform.claude
         
         print_s()
         user_input = ''
+    elif user_input.strip() == "context":
+        for i, message in enumerate(input_to_model):
+            role = message["role"]
+            content = message["content"]
+            print_s(f"[{i}] - {model_color}{role}\n{output_color}{content}{ANSII_RESET}\n")
+        user_input = ''
+    elif user_input.strip() == "usage":
+        # https://platform.claude.com/claude-code
+        print_s(f"{model_color}Some apis don't expose usage statistics, so you'll have to log into the api dashboards to see this unfortunetly. \n\n{output_color}https://platform.claude.com/workspaces/default/cost?range=last_30_days\nhttps://platform.openai.com/usage{ANSII_RESET}\n")
+        user_input = ''
     elif user_input.strip() == "help":
         print_s(model_color)
         print_s("Help:")
@@ -420,6 +430,8 @@ Docs: https://developers.openai.com/api/docs/models/all, https://platform.claude
         print_s("- dir (sandbox the model to a certain directory. By default the current directory is used)")
         print_s("- notes (This is what the assistant has written down about the current conversation and represents what they remember)")
         print_s("- memory (Make or manage memories stored in this repo for persistant context)")
+        print_s("- context (Outputs the models context, showing what is sent with each request. This list is periodically summarized to avoid sending to much with each request.)")
+        print_s("- usage (Links for seeing usage in api dashboards)")
         print_s(ANSII_RESET)
 
         user_input = ''
@@ -810,44 +822,55 @@ Make sure to call the 'done' function to indicate you've finished.
 
     return user_res
 
-def add_function_result(tool_use_id, tool_use, result):
-    if API == OPEN_AI:
-        input_to_model.append(
-            {
-                "type": "function_call",
-                "call_id": tool_use_id,
-                "name": tool_use['name'],
-                "arguments": json.dumps(tool_use['input'])
-            }
-        )
-        input_to_model.append(
-            {
-                "type": "function_call_output",
-                "call_id": tool_use_id,
-                "output": result
-            }
-        )
-    else:
-        input_to_model.append(
-            {
-                "role": ASSISTANT,
-                "content": [
-                    tool_use
-                ]
-            }
-        )
-        input_to_model.append(
-            {
-                "role": USER,
-                "content": [
-                    {
-                        "type": "tool_result",
-                        "tool_use_id": tool_use_id,
-                        "content": result
+def convert_to_open_ai(input_to_model) -> list:
+    open_ai_input_to_model = []
+    for message in input_to_model:
+        # normal messages
+        if isinstance(message['content'], str):
+            open_ai_input_to_model.append(message)
+        # tools/functions
+        else:
+            for item in message['content']:
+                if item["type"] == "tool_use":
+                    new_message = {
+                        "type": "function_call",
+                        "call_id": item["id"],
+                        "name": item['name'],
+                        "arguments": json.dumps(item['input'])
                     }
-                ]
-            }
-        )
+                    open_ai_input_to_model.append(new_message)
+                # tools/function result
+                elif item["type"] == "tool_result":
+                    new_message = {
+                        "type": "function_call_output",
+                        "call_id": item["tool_use_id"],
+                        "output": item['content']
+                    }
+                    open_ai_input_to_model.append(new_message)
+
+    return open_ai_input_to_model
+
+def add_function_result(tool_use_id, tool_use, result):
+    input_to_model.append(
+        {
+            "role": ASSISTANT,
+            "content": [
+                tool_use
+            ]
+        }
+    )
+    input_to_model.append(
+        {
+            "role": USER,
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": tool_use_id,
+                    "content": result
+                }
+            ]
+        }
+    )
 
 def handle_function_call(name, args, tool_use_id, tool_use):
     global NO_QUESTIONS_IN_AUTO_MODE, memory
@@ -1068,14 +1091,14 @@ def call_api(model_input, include_functions=True):
         if include_functions:
             body = json.dumps({
                 "model": MODEL,
-                "input": model_input,
+                "input": convert_to_open_ai(model_input),
                 "tools": tools,
                 "tool_choice": "auto" if API == OPEN_AI else {"type":"auto"}
             })
         else:
             body = json.dumps({
                 "model": MODEL,
-                "input": model_input
+                "input": convert_to_open_ai(model_input)
             })
 
         conn = http.client.HTTPSConnection("api.openai.com")
@@ -1174,6 +1197,10 @@ def auto_mode_loop(max_attempts=100):
 
         # prompt ai and handle response
         outputs, error = call_api(input_to_model)
+        
+        with open("claude.json", 'w') as file:
+            file.write(json.dumps(input_to_model, indent=4))
+
         actions += 1
         if not error:
 
