@@ -675,7 +675,7 @@ def define_model_functions():
         },
         {
             "name": "run_command",
-            "description": "Run a command in the directory",
+            "description": "Run a command in the directory. All paths should be relative to the current directory. Any path not in the directory will be made relative to the current directory.",
             params_name: {
                 "type": "object",
                 "properties": {
