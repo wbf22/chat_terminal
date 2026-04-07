@@ -891,7 +891,7 @@ def handle_function_call(name, args, tool_use_id, tool_use):
         command = command if command != None else ''
 
         command = convert_paths_in_command(command)
-        input_function_loop(command, tool_use_id, tool_use, input_to_model)
+        input_function_loop(command, tool_use_id, tool_use)
     elif name == "ls":
         path = args.get('path')
         path = path if path != None else ''
@@ -963,8 +963,8 @@ write to file {path}
 
     return input_to_model
 
-def input_function_loop(command, tool_use_id, tool_use, input_to_model):
-    global actions
+def input_function_loop(command, tool_use_id, tool_use):
+    global actions, input_to_model
     
     # start process
     process = None
@@ -985,6 +985,13 @@ def input_function_loop(command, tool_use_id, tool_use, input_to_model):
         # prompt user if max_actions has been hit
         should_continue = check_for_max_actions()
         if not should_continue:
+            msg = "The user has requested you stop. Please ask them for further instructions"
+            input_to_model.append(
+                {
+                    "content": msg,
+                    "role": USER,
+                }
+            )
             break
 
         # break out if process is finished
@@ -1026,14 +1033,18 @@ def input_function_loop(command, tool_use_id, tool_use, input_to_model):
                         print_s(f"{error_color}rejected attempt to run command while other command is running{ANSII_RESET}")
 
                 else:
-                    msg = "Right now you have a command running and it's waiting for your input. Use 'command_input' or 'kill_command' functions before sending the user a message."
+                    message = output['text']
+                    print_and_save_ai_message_to_history(message, False)
+
+                    msg = "Right now you have a command running and it's waiting for your input. Since you sent a message we'll assume you're done and kill the command."
                     input_to_model.append(
                         {
                             "content": msg,
                             "role": USER,
                         }
                     )
-                    print_s(f"{error_color}rejected message since ai is running a command currently{ANSII_RESET}")
+                    kill = True
+
             
             if kill:
                 process.kill()
