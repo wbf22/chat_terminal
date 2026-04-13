@@ -3,6 +3,7 @@
 
 
 
+import datetime
 import json
 import os
 from pathlib import Path
@@ -15,10 +16,10 @@ import json
 import sys
 import argparse
 import http.client
-import termios
 import threading
 import time
-import tty
+import difflib
+import re
 from typing import Optional
 
 
@@ -41,8 +42,6 @@ parser.add_argument('-m', '--model', default='gpt-5-nano', help='The api model y
 parser.add_argument('-a', '--api', default=OPEN_AI, help=f'Which api your model name is from. Currenlty only \'{OPEN_AI}\' and \'{ANTHROPIC}\' are supported.')
 
 parser.add_argument('-d', '--dir', help='The directory in which the AI can execute commands and edit files. The currently directory by default.')
-
-
 
 args = parser.parse_args()
 
@@ -85,7 +84,6 @@ NO_QUESTIONS_IN_AUTO_MODE = False
 MAX_ACTIONS = 24
 HISTORY_LENGTH = 10
 CONVERSATION_SUMMARY_RATE = 10
-
 
 
 request_done = False
@@ -416,7 +414,7 @@ Docs: https://developers.openai.com/api/docs/models/all, https://platform.claude
         user_input = ''
     elif user_input.strip() == "usage":
         # https://platform.claude.com/claude-code
-        print_s(f"{model_color}Some apis don't expose usage statistics, so you'll have to log into the api dashboards to see this unfortunetly. \n\n{output_color}https://platform.claude.com/workspaces/default/cost?range=last_30_days\nhttps://platform.openai.com/usage{ANSII_RESET}\n")
+        print_s(f"{model_color}Some apis don't expose usage statistics, so you'll have to log into the api dashboards to see this unfortunetly. \n\n{output_color}https://platform.claude.com/cost\nhttps://platform.openai.com/usage{ANSII_RESET}\n")
         user_input = ''
     elif user_input.strip() == "help":
         print_s(model_color)
@@ -439,31 +437,23 @@ Docs: https://developers.openai.com/api/docs/models/all, https://platform.claude
 
     return user_input
 
-def is_in_dir(base_dir, path):
-    base = Path(base_dir).resolve()
-    target = Path(path).resolve()
-    return base in target.parents or target == base
-
-def convert_to_directory_path(path):
-
-    if not is_in_dir(AUTO_DIRECTORY, path):
-        if path.startswith("/"):
-            path = path[1:]
-        path = os.path.join(AUTO_DIRECTORY, path)
-
-    return path
-
-def convert_paths_in_command(command):
-    # Matches unix/windows absolute paths and relative paths with extensions
+def has_paths_outside_cwd(command):
     path_pattern = r'(?:\/[\w.\-\/]+|[A-Za-z]:\\[\w.\-\\]+|\.{0,2}\/[\w.\-\/]+|\w[\w.\-]*\/[\w.\-\/]*)'
-
-    def replace_path(match):
+    
+    
+    def is_outside_cwd(match):
         path = match.group(0)
-        new_path = convert_to_directory_path(path)
-        return new_path
-
-    modified = re.sub(path_pattern, replace_path, command)
-    return modified
+        try:
+            # resolve to absolute path, handles ../ etc
+            resolved = Path(path).resolve()
+            # check if cwd is a parent of the resolved path
+            resolved.relative_to(AUTO_DIRECTORY)
+            return False  # inside cwd
+        except ValueError:
+            return True   # outside cwd
+    
+    matches = re.finditer(path_pattern, command)
+    return any(is_outside_cwd(m) for m in matches)
 
 def is_command_in_directory(command: str) -> bool:
     sandbox = Path(AUTO_DIRECTORY).resolve()
@@ -480,6 +470,109 @@ def is_command_in_directory(command: str) -> bool:
             return False
     
     return True
+
+def add_line_numbers(text, start=1, sep="| "):
+    """
+    Prefix each line with a line number.
+
+    Example:
+        hello
+        world
+    ->
+        1: hello
+        2: world
+    """
+    lines = text.splitlines(keepends=True)
+    spaces = len(str(len(lines)))
+    return "".join(f"{i}{" " * (spaces-len(str(i))) + sep}{line}" for i, line in enumerate(lines, start=start))
+
+def remove_line_numbers(text, sep="| "):
+    """
+    Remove line numbers added by add_line_numbers.
+
+    Handles:
+        1: hello
+        23: world
+    """
+    pattern = re.compile(rf"^\s*\d+\s*{re.escape(sep)}")
+
+    lines = text.splitlines(keepends=True)
+    return "".join(pattern.sub("", line) for line in lines)
+
+def edit_lines(path, start_line, end_line, contents):
+    start_line = int(start_line)
+    end_line = int(end_line)
+    
+    with open(path, 'r') as f:
+        old_lines = f.readlines()
+    
+    # split contents into lines, preserving newlines
+    new_lines = contents.splitlines(keepends=True)
+    
+    # ensure last line has newline if original file did
+    if new_lines and not new_lines[-1].endswith('\n'):
+        new_lines[-1] += '\n'
+    
+    # create updated version
+    updated_lines = old_lines[:]
+    updated_lines[start_line:end_line] = new_lines
+    
+    # write updated file
+    with open(path, 'w') as f:
+        f.writelines(updated_lines)
+
+    # ---- pretty print diff ----
+    diff = difflib.unified_diff(
+        old_lines,
+        updated_lines,
+        fromfile='before',
+        tofile='after',
+        lineterm=''
+    )
+
+    # ANSI colors
+    RED = '\033[31m'
+    GREEN = '\033[32m'
+    CYAN = '\033[36m'
+    RESET = '\033[0m'
+
+    for line in diff:
+        if line.startswith('+') and not line.startswith('+++'):
+            print_s(f"{GREEN}{line}{RESET}", end='')
+        elif line.startswith('-') and not line.startswith('---'):
+            print_s(f"{RED}{line}{RESET}", end='')
+        elif line.startswith('@@'):
+            print_s(f"{CYAN}{line}{RESET}", end='')
+        else:
+            print_s(line, end='')
+
+    return ''.join(diff)
+
+last_ai_file_view = {}
+def update_last_ai_file_view(path: Path):
+    path_key = str(path.resolve())
+    # update last known AI baseline
+    last_ai_file_view[path_key] = time.time()
+
+def file_edited_since_last_ai_edit(path: Path):
+    global last_ai_file_view
+
+    path_key = str(path.resolve())
+
+
+    # If we've seen this file before
+    was_edited = False
+    if path_key in last_ai_file_view:
+        ai_edit_time = last_ai_file_view[path_key]
+
+        stat = os.stat(path_key)
+        modified_time = stat.st_mtime  # keep everything in unix timestamps
+
+        # external modification detected (1000ms after assuming there was a delay between this and saving)
+        if modified_time > ai_edit_time + 1: 
+            was_edited = True
+
+    return was_edited
 
 def summarize_repo(directories: list[str], exclude: list[str]):
     global input_to_model, memory, using_memory
@@ -594,7 +687,6 @@ summary of the repo and start helping them with their questions.
     memory.insert(0, message)
     add_and_write_memory(None)
     
-
 def check_for_max_actions():
     global actions
     if actions > MAX_ACTIONS:
@@ -605,6 +697,16 @@ def check_for_max_actions():
             actions = 0    
     
     return True
+
+def make_file_change_ai_message(p:Path):
+
+    print_s(f"{error_color}The assistant hasn't seen the file since the most recent edits. Sending that now...{ANSII_RESET}")
+    print_s()
+    file_c = None
+    with open(p, 'r') as file:
+        file_c = file.read()
+    file_c = add_line_numbers(file_c)
+    return f"This file was edited since you last saw it. New contents: \n\n{file_c}"
 
 class TalkProcess:
 
@@ -675,7 +777,7 @@ def define_model_functions():
         },
         {
             "name": "run_command",
-            "description": "Run a command in the directory. All paths should be relative to the current directory. Any path not in the directory will be made relative to the current directory.",
+            "description": "Run a command in the working directory.",
             params_name: {
                 "type": "object",
                 "properties": {
@@ -714,7 +816,7 @@ def define_model_functions():
                 "properties": {
                     "path": {
                         "type": "string",
-                        "description": "Path to the directory, e.g. /myfolder"
+                        "description": "Path to the directory, e.g. /myfolder Use '.' or an empty string to see what's in the current directory"
                     }
                 },
                 "required": ["path"]
@@ -750,6 +852,32 @@ def define_model_functions():
                     }
                 },
                 "required": ["path", "contents"]
+            }
+        },
+        {
+            "name": "edit_lines",
+            "description": "Replace lines with new content in a file",
+            params_name: {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Path to the file, e.g. /myfolder/myfile.txt"
+                    },
+                    "start_line": {
+                        "type": "string",
+                        "description": "The start line to replace (inclusive)"
+                    },
+                    "end_line": {
+                        "type": "string",
+                        "description": "The end line to replace (exclusive)"
+                    },
+                    "contents": {
+                        "type": "string",
+                        "description": "The data that will replace the contents between 'start_line' and 'end_line'"
+                    }
+                },
+                "required": ["path", "start_line", "end_line", "contents"]
             }
         },
         {
@@ -890,13 +1018,20 @@ def handle_function_call(name, args, tool_use_id, tool_use):
         command = args.get('command')
         command = command if command != None else ''
 
-        command = convert_paths_in_command(command)
-        input_function_loop(command, tool_use_id, tool_use)
+        allow = True
+        if (has_paths_outside_cwd(command)):
+            print_s(f"{model_color}The assistant is trying to run a command outside the set directory '{command}'. Do you want to allow it (y/n)?: {ANSII_RESET}", end="")
+            allow = input() == 'y'
+
+        if allow:
+            input_function_loop(command, tool_use_id, tool_use)
+        else:
+            add_function_result(tool_use_id, tool_use, f"The user was prompted and has denied your request to run a command outside the sandboxed directory.")
+
     elif name == "ls":
         path = args.get('path')
         path = path if path != None else ''
 
-        path = convert_to_directory_path(path)
         cmd = f"ls -la {path}"
         p_result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
         result = f'{p_result.stdout}\n{p_result.stderr}'
@@ -906,40 +1041,61 @@ def handle_function_call(name, args, tool_use_id, tool_use):
     elif name == "cat":
         path = args.get('path')
         path = path if path != None else ''
+        p = Path(path)
 
-        path = convert_to_directory_path(path)
-        p_result = subprocess.run(f"cat {path}", shell=True, capture_output=True, text=True)
-        result = f'{p_result.stdout}\n{p_result.stderr}'
+        result = 'file does not exist'
+        if p.exists():
+            file_c = ''
+            with open(p, 'r') as file:
+                file_c = file.read()
+            result = add_line_numbers(file_c)
+
         print_s(f"{output_color}{result[:256]}\n...{ANSII_RESET}")
         print_s()
+        update_last_ai_file_view(p)
         add_function_result(tool_use_id, tool_use, result)
     elif name == "write_file":
         path = args.get('path')
         contents = args.get('contents')
         path = path if path != None else ''
-        contents = contents if contents != None else ''
+        contents = remove_line_numbers(contents) if contents != None else ''
 
-        path = convert_to_directory_path(path)
         p = Path(path)
-        p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(contents)
+        result = None
+        if file_edited_since_last_ai_edit(p):
+            result = make_file_change_ai_message(p)
+        else:
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(contents)
+            result = add_line_numbers(contents)
 
-        result = f"""
-write to file {path}
-```
-{contents}
-```
-        """
-        print_s(f"{output_color}{result}{ANSII_RESET}")
-        print_s()
-        if contents == '':
-            result += "\nYou didn't specify any file 'contents' so an empty file was created"
+            print_s(f"{output_color}{result}{ANSII_RESET}")
+            print_s()
+
+        update_last_ai_file_view(p)
+        add_function_result(tool_use_id, tool_use, result)
+    elif name == "edit_lines":
+        path = args.get('path')
+        start_line = args.get('start_line')
+        end_line = args.get('end_line')
+        contents = args.get('contents')
+        contents = remove_line_numbers(contents) if contents != None else ''
+        p = Path(path)
+        result = ""
+        if p.exists():
+            if file_edited_since_last_ai_edit(p):
+                result = make_file_change_ai_message(p)
+            else:
+                result = edit_lines(p, start_line, end_line, contents)
+            update_last_ai_file_view(p)
+        else:
+            result = "file does not exist"
+            print_s(f"{error_color}{result}{ANSII_RESET}")
         add_function_result(tool_use_id, tool_use, result)
     elif name == "delete":
         path = args.get('path')
         path = path if path != None else ''
 
-        path = convert_to_directory_path(path)
         p = Path(path)
         if p.is_file():
             p.unlink()
@@ -969,13 +1125,10 @@ def input_function_loop(command, tool_use_id, tool_use):
     # start process
     process = None
     output = None
-    if is_command_in_directory(command):
-        process = TalkProcess(command, AUTO_DIRECTORY)
-        output = process.get_output()
-        print_s(f"{output_color}{output}{ANSII_RESET}\n")
-    else:
-        output = f"invalid command, working outside designated directory '{AUTO_DIRECTORY}'. Stick to relative paths"
- 
+    process = TalkProcess(command, AUTO_DIRECTORY)
+    output = process.get_output()
+    print_s(f"{output_color}{output}{ANSII_RESET}\n")
+
     add_function_result(tool_use_id, tool_use, output)
     
     kill = False
@@ -1033,6 +1186,8 @@ def input_function_loop(command, tool_use_id, tool_use):
                         print_s(f"{error_color}rejected attempt to run command while other command is running{ANSII_RESET}")
 
                 else:
+                    print_s(type);
+                    print_s(output);
                     message = output['text']
                     print_and_save_ai_message_to_history(message, False)
 
