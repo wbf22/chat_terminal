@@ -515,7 +515,7 @@ def edit_lines(path, start_line, end_line, contents):
     
     # create updated version
     updated_lines = old_lines[:]
-    updated_lines[start_line:end_line] = new_lines
+    updated_lines[start_line-1:end_line] = new_lines
     
     # write updated file
     with open(path, 'w') as f:
