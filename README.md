@@ -29,3 +29,4 @@ Feel free to make a pr and we can you review any changes you'd like to make.
 
 You can also make a issue for any bugs you find.
 
+If you'd like to support me, here's my sponser page https://github.com/sponsors/wbf22
