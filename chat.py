@@ -765,7 +765,7 @@ def define_model_functions():
     tools = [
         {
             "name": "run_command",
-            "description": "Run a command in the working directory.",
+            "description": "Run a command in the working directory. (Avoid git commands or other more dangerous commands unless the user gives permission)",
             params_name: {
                 "type": "object",
                 "properties": {
