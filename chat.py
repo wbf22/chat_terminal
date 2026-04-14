@@ -37,9 +37,10 @@ models = [
 # define arguments
 parser = argparse.ArgumentParser(description="A terminal app for accessing chat gpt")
 parser.add_argument('-ok', '--open_ai_api_key', help='Your open-api key created at https://platform.openai.com/api-keys')
-parser.add_argument('-ak', '--anthropic_api_key', required=True, help='Your anthropic api key created at https://platform.claude.com/settings/keys')
+parser.add_argument('-ak', '--anthropic_api_key', help='Your anthropic api key created at https://platform.claude.com/settings/keys')
 parser.add_argument('-m', '--model', default='gpt-5-nano', help='The api model you\'ll access. View models here https://platform.openai.com/docs/models')
 parser.add_argument('-a', '--api', default=OPEN_AI, help=f'Which api your model name is from. Currenlty only \'{OPEN_AI}\' and \'{ANTHROPIC}\' are supported.')
+parser.add_argument('-nc', '--no_commands', action='store_true', help='disable the running of commands by assistants')
 
 parser.add_argument('-d', '--dir', help='The directory in which the AI can execute commands and edit files. The currently directory by default.')
 
@@ -49,6 +50,7 @@ API = args.api
 MODEL = args.model
 OPEN_AI_API_KEY = args.open_ai_api_key
 ANTHROPIC_API_KEY = args.anthropic_api_key
+NO_COMMANDS = args.no_commands
 
 
 
@@ -152,7 +154,7 @@ def print_s(
     print(*values, sep=sep, end=end, flush=flush, file=file)
 
 
-USER_TAG = 'YOU: (type help for special commands)'
+USER_TAG = 'YOU: (type help for special commands, to paste code type \'vim\' and edit your prompt there)'
 def print_and_save_user_input_to_history():
 
     # get prompt
@@ -762,20 +764,6 @@ def define_model_functions():
 
     tools = [
         {
-            "name": "done",
-            "description": "Sometimes the user may indicate they want you to complete a task without asking questions such as building and testing a program. Use this command to indicate you have finished a task like that. Not necessary for normal back and forth conversation.",
-            params_name: {
-                "type": "object",
-                "properties": {
-                    "text": {
-                        "type": "string",
-                        "description": "What you want to say to the user now that you're done"
-                    }
-                },
-                "required": ["text"]
-            }
-        },
-        {
             "name": "run_command",
             "description": "Run a command in the working directory.",
             params_name: {
@@ -787,6 +775,20 @@ def define_model_functions():
                     }
                 },
                 "required": ["command"]
+            }
+        },
+        {
+            "name": "done",
+            "description": "Sometimes the user may indicate they want you to complete a task without asking questions such as building and testing a program. Use this command to indicate you have finished a task like that. Not necessary for normal back and forth conversation.",
+            params_name: {
+                "type": "object",
+                "properties": {
+                    "text": {
+                        "type": "string",
+                        "description": "What you want to say to the user now that you're done"
+                    }
+                },
+                "required": ["text"]
             }
         },
         {
@@ -837,24 +839,6 @@ def define_model_functions():
             }
         },
         {
-            "name": "write_file",
-            "description": "Overwrite a file with new contents. Always provide the complete file contents in the 'contents' field — this field is mandatory and must never be omitted.",
-            params_name: {
-                "type": "object",
-                "properties": {
-                    "path": {
-                        "type": "string",
-                        "description": "Path to the file, e.g. /myfolder/myfile.txt"
-                    },
-                    "contents": {
-                        "type": "string",
-                        "description": "The data that will replace the contents of the file"
-                    }
-                },
-                "required": ["path", "contents"]
-            }
-        },
-        {
             "name": "edit_lines",
             "description": "Replace lines with new content in a file",
             params_name: {
@@ -878,6 +862,24 @@ def define_model_functions():
                     }
                 },
                 "required": ["path", "start_line", "end_line", "contents"]
+            }
+        },
+        {
+            "name": "write_file",
+            "description": "Overwrite a file with new contents. Always provide the complete file contents in the 'contents' field — this field is mandatory and must never be omitted.",
+            params_name: {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Path to the file, e.g. /myfolder/myfile.txt"
+                    },
+                    "contents": {
+                        "type": "string",
+                        "description": "The data that will replace the contents of the file"
+                    }
+                },
+                "required": ["path", "contents"]
             }
         },
         {
@@ -909,6 +911,9 @@ def define_model_functions():
             }
         }
     ]
+
+    if NO_COMMANDS:
+        tools = tools[1:]
 
     if API == OPEN_AI:
         for tool in tools:
