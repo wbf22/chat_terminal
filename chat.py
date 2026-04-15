@@ -1441,6 +1441,14 @@ def auto_mode_loop(max_attempts=100):
 
 
 # START
+if OPEN_AI_API_KEY is None and ANTHROPIC_API_KEY is None:
+    print(f"{error_color}You need to provide an api key to continue. Run with '--help' to see how to provide an api key{ANSII_RESET}")
+    exit(1)
+
+if OPEN_AI_API_KEY is None:
+    API = ANTHROPIC
+elif ANTHROPIC_API_KEY is None:
+    API = OPEN_AI
 
 # set up model functions based on api
 define_model_functions()
