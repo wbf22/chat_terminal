@@ -254,17 +254,21 @@ def user_prompt():
         sys.stdout.flush()
         
         # load history into file
-        write_history(history)
+        # write_history(history)
 
         # open vim for user
         subprocess.run(['vim', '+', FILE_PATH])
-        with open(FILE_PATH, 'r') as file:
-            content = file.read()
-        os.remove(FILE_PATH)
+        p = Path(FILE_PATH)
+        content = ''
+        if p.exists():
+            with open(FILE_PATH, 'r') as file:
+                content = file.read()
+            os.remove(FILE_PATH)
 
         # parse out last user input and store in user_input
-        last_message_start = content.rfind(USER_TAG)
-        user_input = content[last_message_start+37:]
+        # last_message_start = content.rfind(USER_TAG)
+        # user_input = content[last_message_start+37:]
+        user_input = content
         print_s(user_input)
     elif user_input.strip() == 'quit' or user_input == 'q':
         if using_memory and len(input_to_model) > 1:
