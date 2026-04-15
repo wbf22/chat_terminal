@@ -197,9 +197,9 @@ def add_and_write_memory(new_mem):
         if new_mem is not None:
             memory.append(new_mem)
 
-        # limit the size of memory to a few hundred memories, saving the first memory which can potentially be the latest repo summary
+        # limit the size of memory to a few memories, saving the first memory which can potentially be the latest repo summary
         first_memory = memory[0]
-        memory = [first_memory] + memory[1:100]
+        memory = [first_memory] + memory[-10:]
 
         # write to file
         json_str = json.dumps(memory, indent=4)
@@ -1248,7 +1248,25 @@ def prompt_ai_to_update_notes_and_shrink_history():
         if not error and len(outputs) != 0:
             summary = outputs[0]['text']
         
-            input_to_model = input_to_model[-HISTORY_LENGTH:]
+            # make sure we don't delete tool calls to function output we still have
+            new_length = HISTORY_LENGTH
+            i = len(input_to_model) - 1
+            tool_results = set()
+            while i >= 0:
+                content = input_to_model[i]["content"]
+                if isinstance(content, list):
+                    for call in content:
+                        if call["type"] == "tool_result":
+                            tool_results.add(call["tool_use_id"])
+                        if call["type"] == "tool_use":
+                            tool_results.remove(call['id'])
+                    
+                if len(input_to_model) - i >= HISTORY_LENGTH and len(tool_results) == 0:
+                    new_length = len(input_to_model) - i + 1
+                    break;
+                i-=1
+
+            input_to_model = input_to_model[-new_length:]
             add_and_write_memory(summary)
 
         print_s()
