@@ -41,6 +41,7 @@ parser.add_argument('-ak', '--anthropic_api_key', help='Your anthropic api key c
 parser.add_argument('-m', '--model', default='gpt-5-nano', help='The api model you\'ll access. View models here https://platform.openai.com/docs/models')
 parser.add_argument('-a', '--api', default=OPEN_AI, help=f'Which api your model name is from. Currenlty only \'{OPEN_AI}\' and \'{ANTHROPIC}\' are supported.')
 parser.add_argument('-nc', '--no_commands', action='store_true', help='disable the running of commands by assistants')
+parser.add_argument('-g', '--no_git_commands', action='store_true', help='disable the running of git commands by assistants')
 
 parser.add_argument('-d', '--dir', help='The directory in which the AI can execute commands and edit files. The currently directory by default.')
 
@@ -51,6 +52,7 @@ MODEL = args.model
 OPEN_AI_API_KEY = args.open_ai_api_key
 ANTHROPIC_API_KEY = args.anthropic_api_key
 NO_COMMANDS = args.no_commands
+NO_GIT_COMMANDS = args.no_git_commands
 
 
 
@@ -782,6 +784,10 @@ def define_model_functions():
             }
         },
         {
+            "name": "list_running_commands",
+            "description": "If you launch multiple commands at once, this is useful to see how many commands are running"
+        },
+        {
             "name": "done",
             "description": "Sometimes the user may indicate they want you to complete a task without asking questions such as building and testing a program. Use this command to indicate you have finished a task like that. Not necessary for normal back and forth conversation.",
             params_name: {
@@ -797,7 +803,7 @@ def define_model_functions():
         },
         {
             "name": "kill_command",
-            "description": "Kill a command/process that is running",
+            "description": "Kill a command/process that is running. If multiple are running then the most recent command is killed",
             params_name: { "type": "object", "properties": {}}
         },
         {
@@ -1009,8 +1015,14 @@ def add_function_result(tool_use_id, tool_use, result):
         }
     )
 
+def print_function_call_info(name, args, tool_use_id):
+    print_s(f"{model_color}{name} {json.dumps(args)[:64]}... {tool_use_id}{ANSII_RESET}")
+    print_s()
+
 def handle_function_call(name, args, tool_use_id, tool_use):
     global NO_QUESTIONS_IN_AUTO_MODE, memory
+
+    print_function_call_info(name, args, tool_use_id)
 
     # handle each command
     if name == 'done':
@@ -1022,7 +1034,6 @@ def handle_function_call(name, args, tool_use_id, tool_use):
                 "role": USER,
             }
         )
-
     elif name == "run_command":
         command = args.get('command')
         command = command if command != None else ''
@@ -1031,12 +1042,18 @@ def handle_function_call(name, args, tool_use_id, tool_use):
         if (has_paths_outside_cwd(command)):
             print_s(f"{model_color}The assistant is trying to run a command outside the set directory '{command}'. Do you want to allow it (y/n)?: {ANSII_RESET}", end="")
             allow = input() == 'y'
-
+            add_function_result(tool_use_id, tool_use, f"The user was prompted and has denied your request to run a command outside the sandboxed directory.")
+        elif NO_GIT_COMMANDS and "git" in command:
+            add_function_result(tool_use_id, tool_use, f"The user has diabled git commands and your command '{command}' appears to be one. Please don't use git commands")
+            allow = False
+        
         if allow:
             input_function_loop(command, tool_use_id, tool_use)
-        else:
-            add_function_result(tool_use_id, tool_use, f"The user was prompted and has denied your request to run a command outside the sandboxed directory.")
-
+    elif name == "list_running_commands":
+        result = "\n".join(running_commands)
+        print_s(f"{output_color}{result}{ANSII_RESET}")
+        print_s()
+        add_function_result(tool_use_id, tool_use, result)
     elif name == "ls":
         path = args.get('path')
         path = path if path != None else ''
@@ -1128,8 +1145,9 @@ def handle_function_call(name, args, tool_use_id, tool_use):
 
     return input_to_model
 
+running_commands = []
 def input_function_loop(command, tool_use_id, tool_use):
-    global actions, input_to_model
+    global actions, input_to_model, running_commands
     
     # start process
     process = None
@@ -1139,9 +1157,10 @@ def input_function_loop(command, tool_use_id, tool_use):
     print_s(f"{output_color}{output}{ANSII_RESET}\n")
 
     add_function_result(tool_use_id, tool_use, output)
+    if not process.is_finished():
+        running_commands.append(command)
     
     kill = False
-    made_calls = False
     while process != None and not process.is_finished():
 
         # prompt user if max_actions has been hit
@@ -1167,15 +1186,13 @@ def input_function_loop(command, tool_use_id, tool_use):
         if not error:
             for output in outputs:
                 type = output['type']
-                if type == "function_call":
+                if type == "tool_use":
 
                     name = output['name']
-                    tool_use_id = output['tool_use_id']
-                    print_s(f"{model_color}{name} {output['arguments']} {tool_use_id}{ANSII_RESET}\n")
+                    tool_use_id = output['id']
+                    args = output['input']
                     if name == "command_input":
-                        args = {}
-                        if 'arguments' in output:
-                            args = json.loads(output['arguments'])
+                        print_function_call_info(name, args, tool_use_id)
                         ai_input = args['input']
 
                         # send ai input
@@ -1188,15 +1205,13 @@ def input_function_loop(command, tool_use_id, tool_use):
                         add_function_result(tool_use_id, output, result)
 
                     elif name == "kill_command":
+                        print_function_call_info(name, args, tool_use_id)
                         kill = True
                         add_function_result(tool_use_id, output, "Process was killed")
                     else:
-                        add_function_result(tool_use_id, output, "Right now you have a command running. If you want run another function, use 'command_input' or 'kill_command' functions to finish first.")
-                        print_s(f"{error_color}rejected attempt to run command while other command is running{ANSII_RESET}")
+                        handle_function_call(name, args, tool_use_id, output)
 
                 else:
-                    print_s(type);
-                    print_s(output);
                     message = output['text']
                     print_and_save_ai_message_to_history(message, False)
 
@@ -1212,6 +1227,7 @@ def input_function_loop(command, tool_use_id, tool_use):
             
             if kill:
                 process.kill()
+                running_commands.pop()
 
         else:
             input_to_model.append(
@@ -1429,8 +1445,6 @@ def auto_mode_loop(max_attempts=100):
                     name = output['name']
                     args = output['input']
                     tool_use_id = output['id']
-                    print_s(f"{model_color}{name} {json.dumps(args)[:64]}... {tool_use_id}{ANSII_RESET}")
-                    print_s()
                     handle_function_call(name, args, tool_use_id, output)
         else:
             message = outputs
