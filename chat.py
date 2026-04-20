@@ -194,7 +194,7 @@ def load_memory():
 def add_and_write_memory(new_mem):
     global memory, input_to_model
 
-    if using_memory and len(memory) > 0:
+    if using_memory:
         if new_mem is not None:
             memory.append(new_mem)
 
@@ -208,10 +208,13 @@ def add_and_write_memory(new_mem):
             file.write(json_str)
 
         mems = '\n'.join(memory)
-        input_to_model[0] = {
-            "content": f"Memories (conversation notes):\n{mems}",
-            "role": ASSISTANT,
-        }
+        input_to_model.insert(
+            0, 
+            {
+                "content": f"Memories (conversation notes):\n{mems}",
+                "role": ASSISTANT,
+            }
+        )
 
 def promp_ai_for_memory():
     global input_to_model
@@ -466,17 +469,21 @@ Docs: https://developers.openai.com/api/docs/models/all, https://platform.claude
 def has_paths_outside_cwd(command):
     path_pattern = r'(?:\/[\w.\-\/]+|[A-Za-z]:\\[\w.\-\\]+|\.{0,2}\/[\w.\-\/]+|\w[\w.\-]*\/[\w.\-\/]*)'
     
-    
     def is_outside_cwd(match):
         path = match.group(0)
+
+        # Skip URLs
+        start = match.start()
+        preceding = command[max(0, start-8):start]
+        if '://' in command[max(0, start-8):match.end()] or preceding.lower().endswith(('http:', 'https:')):
+            return False
+        
         try:
-            # resolve to absolute path, handles ../ etc
-            resolved = Path(path).resolve()
-            # check if cwd is a parent of the resolved path
-            resolved.relative_to(AUTO_DIRECTORY)
-            return False  # inside cwd
+            resolved = (Path(AUTO_DIRECTORY) / path).absolute()
+            resolved.relative_to(Path(AUTO_DIRECTORY).absolute())
+            return False  # inside AUTO_DIRECTORY
         except ValueError:
-            return True   # outside cwd
+            return True  # outside AUTO_DIRECTORY
     
     matches = re.finditer(path_pattern, command)
     return any(is_outside_cwd(m) for m in matches)
@@ -1068,7 +1075,7 @@ def handle_function_call(name, args, tool_use_id, tool_use):
         if allow:
             input_function_loop(command, tool_use_id, tool_use)
     elif name == "list_running_commands":
-        result = "\n".join(running_commands)
+        result = "\n".join([command for _, command in running_commands])
         print_s(f"{output_color}{result}{ANSII_RESET}")
         print_s()
         add_function_result(tool_use_id, tool_use, result)
@@ -1163,7 +1170,7 @@ def handle_function_call(name, args, tool_use_id, tool_use):
 
     return input_to_model
 
-running_commands = []
+running_commands = {}
 def input_function_loop(command, tool_use_id, tool_use):
     global actions, input_to_model, running_commands
     
@@ -1176,9 +1183,8 @@ def input_function_loop(command, tool_use_id, tool_use):
 
     add_function_result(tool_use_id, tool_use, output)
     if not process.is_finished():
-        running_commands.append(command)
+        running_commands[process] = command
     
-    kill = False
     while process != None and not process.is_finished():
 
         # prompt user if max_actions has been hit
@@ -1224,28 +1230,30 @@ def input_function_loop(command, tool_use_id, tool_use):
 
                     elif name == "kill_command":
                         print_function_call_info(name, args, tool_use_id)
-                        kill = True
-                        add_function_result(tool_use_id, output, "Process was killed")
+                        command_name = running_commands.pop(process, 0)
+                        if not process.is_finished():
+                            process.kill()
+                        add_function_result(tool_use_id, output, f"Process was killed: {command_name}")
                     else:
                         handle_function_call(name, args, tool_use_id, output)
 
                 else:
+                    command_name = running_commands.pop(process, 0)
+                    if not process.is_finished():
+                        process.kill()
+
                     message = output['text']
                     print_and_save_ai_message_to_history(message, False)
 
-                    msg = "Right now you have a command running and it's waiting for your input. Since you sent a message we'll assume you're done and kill the command."
+                    msg = f"Right now you have a command running '{command_name}' and it's waiting for your input. Since you sent a message we'll assume you're done and kill the command."
                     input_to_model.append(
                         {
                             "content": msg,
                             "role": USER,
                         }
                     )
-                    kill = True
 
             
-            if kill:
-                process.kill()
-                running_commands.pop()
 
         else:
             input_to_model.append(
@@ -1295,7 +1303,7 @@ def prompt_ai_to_update_notes_and_shrink_history():
                             tool_results.remove(call['id'])
                     
                 if len(input_to_model) - i >= HISTORY_LENGTH and len(tool_results) == 0:
-                    new_length = len(input_to_model) - i + 1
+                    new_length = len(input_to_model) - i
                     break;
                 i-=1
 
@@ -1457,6 +1465,7 @@ def auto_mode_loop(max_attempts=100):
                                 "role": USER,
                             }
                         )
+                        actions = 0
                 elif type == "tool_use":
                     name = output['name']
                     args = output['input']
