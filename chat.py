@@ -3,6 +3,7 @@
 
 
 
+from concurrent.futures import ThreadPoolExecutor
 import datetime
 import json
 import os
@@ -16,10 +17,12 @@ import json
 import sys
 import argparse
 import http.client
+import termios
 import threading
 import time
 import difflib
 import re
+import tty
 from typing import Optional
 
 
@@ -89,9 +92,19 @@ MAX_ACTIONS = 24
 HISTORY_LENGTH = 10
 CONVERSATION_SUMMARY_RATE = 10
 
+def getch():
+    fd = sys.stdin.fileno()
+    old = termios.tcgetattr(fd)
+    try:
+        tty.setraw(fd)
+        if select.select([sys.stdin], [], [], 0.1)[0]: # wait 0.1s
+            return sys.stdin.read(1)
+        return None
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old)
 
-request_done = False
-def loading_indicator():
+def loading_indicator(response_future):
+    
     # Hide the cursor
     sys.stdout.write("\033[?25l")
     sys.stdout.flush()
@@ -99,14 +112,19 @@ def loading_indicator():
     # loop showing elapsed time
     start = time.time()
     length = 0
-    while not request_done:
+    cancelled = False
+    while not response_future.done():
         elapsed = f"{(time.time() - start):.1f}"
         elapsed += 's'
-        move_cursor_back(length)
-        sys.stdout.write(temperature_color + elapsed + ANSII_RESET)
+        sys.stdout.write('\r\x1b[K')
+        sys.stdout.write(output_color + "(ESC to cancel) " + temperature_color + elapsed + ANSII_RESET)
         sys.stdout.flush()
         length = len(elapsed)
-        time.sleep(0.1)
+        c = getch()
+        if c is not None:
+            if c == '\x1b':  # ESC
+                cancelled = True
+                break
         
 
     # clear line
@@ -116,6 +134,8 @@ def loading_indicator():
     # show cursor
     sys.stdout.write("\033[?25h")
     sys.stdout.flush()
+
+    return cancelled
 
 def print_and_save_ai_message_to_history(ai_message, error):
 
@@ -133,7 +153,7 @@ def print_and_save_ai_message_to_history(ai_message, error):
         model_color + MODEL + ANSII_RESET,
         ')'
     )
-    print_s("\n")
+    print_s()
     if (error):
         print_s(error_color + ai_message + ANSII_RESET)
     else:
@@ -199,8 +219,9 @@ def add_and_write_memory(new_mem):
             memory.append(new_mem)
 
         # limit the size of memory to a few memories, saving the first memory which can potentially be the latest repo summary
-        first_memory = memory[0]
-        memory = [first_memory] + memory[-10:]
+        if len(memory) > 10:
+            first_memory = memory[0]
+            memory = [first_memory] + memory[-10:]
 
         # write to file
         json_str = json.dumps(memory, indent=4)
@@ -227,7 +248,7 @@ def promp_ai_for_memory():
             "role": USER,
         }
     )
-    outputs, error = call_api(input_to_model, include_functions=False)
+    outputs, error = call_api(include_functions=False)
     input_to_model = input_to_model[:-1]
     new_mem = ''
     if not error:
@@ -324,33 +345,10 @@ def user_prompt():
     elif user_input.strip() == "summarize":
         print_s()
         print_s(f"{assistant_color}SUMMARIZING A DIRECTORY!{ANSII_RESET}\n")
-        print_s(f"{model_color}Directories{ANSII_RESET}")
-        c = 'b'
-        directories = []
-        while c != "":
-            c = input("Enter a directory path to summarize. Hit enter again to finish (by default the current directory is used)\n")
-            if c != "":
-                directories.append(c)
-            print_s("\033[A\033[2K" * 2, end="", flush=True)
-            print_s(c)
+        directory = input("Enter a directory path to summarize. (by default the current directory is used): ")
         print_s()
-        if len(directories) == 0:
-            directories = [os.getcwd()]
-
-        print_s(f"{model_color}Exclude{ANSII_RESET}")
-        c = 'b'
-        exclude = []
-        while c != "":
-            c = input("Enter a directory path to EXCLUDE. Hit enter again to finish (by default .git in the current directory is excluded)\n")
-            if c != "":
-                exclude.append(c)
-            print_s("\033[A\033[2K" * 2, end="", flush=True)
-            print_s(c)
-        print_s()
-        if len(exclude) == 0:
-            exclude = [".git"]
-        
-        summarize_repo(directories, exclude)
+        if directory == "": directory = AUTO_DIRECTORY
+        summarize_repo(directory)
         user_input = ''
     elif user_input.strip() == "model":
         print_s()
@@ -607,32 +605,15 @@ def file_edited_since_last_ai_edit(path: Path):
 
     return was_edited
 
-def summarize_repo(directories: list[str], exclude: list[str]):
+def summarize_repo(directory):
     global input_to_model, memory, using_memory
 
-    MAX_FILE_SIZE_BYTES = 500 * 1000
+    prompt = f"""
+The user has requested you help them summarize and understand a directory they're working in: '{directory}' 
+Look around that directory and get familiar with it. Then provide the user with a summary
+with the most important details.
 
-    all_files = []
-    for directory in directories:
-        directory_path = Path(directory).resolve()
-        files = [p for p in directory_path.rglob("*") if p.is_file()]
-        for f in files:
-            is_excluded = False
-            for exclude_dir_path in exclude:
-                exlude_dir = Path(exclude_dir_path).resolve()
-                if exlude_dir in f.parents or f == exlude_dir:
-                    is_excluded = True
-                    break
-            
-            if not is_excluded:
-                all_files.append(f)
-
-    print_s("Starting...")
-    prompt = """
-The user has requested you help them summarize and understand the repo they're working in. 
-We'll provide you files, one by one and ask you to summarize them. We'll record your summaries
-in a note sheet which we'll return to you when we've finished. You can then provide the user with a 
-summary of the repo and start helping them with their questions.
+Your current directory: '{AUTO_DIRECTORY}'
     """
     input_to_model.append(
         {
@@ -640,85 +621,29 @@ summary of the repo and start helping them with their questions.
             "role": USER,
         }
     )
-    call_api(input_to_model, include_functions=False)
+    done = False
+    while not done:
+        outputs, error = call_api()
+        for output in outputs:
+            type = output['type']
+            if type == "text":
+                # print ai message
+                message = output['text']
+                print_and_save_ai_message_to_history(message, False)
 
-    start_index = len(input_to_model)
-    notes = []
-    i = 0
-    for file in all_files:
-        i+=1
-        size = file.stat().st_size
-        contents = None
-        if size > MAX_FILE_SIZE_BYTES:
-            print_s(f"{i}/{len(all_files)} {model_color}exceeded max file size: {file} > {MAX_FILE_SIZE_BYTES/1000.0}KB - {ANSII_RESET}")
-            contents = "EXCEEDED MAX FILE SIZE"
-        else:
-            print_s(f"{i}/{len(all_files)} {model_color}reading: {file} - {ANSII_RESET}")
-            try:
-                contents = file.read_text()
-            except FileNotFoundError:
-                print(f"File not found: {file}")
-            except PermissionError:
-                print(f"Permission denied: {file}")
-            except Exception as e:
-                print(f"Unexpected error: {e}")
+                # save as first memory
+                using_memory = True
+                memory.insert(0, message)
+                add_and_write_memory(None)
+                done = True
+
+            elif type == "tool_use":
+                name = output['name']
+                args = output['input']
+                tool_use_id = output['id']
+                handle_function_call(name, args, tool_use_id, output)
 
 
-        prompt = f"```{file}\n{contents}\n```\nReturn a one line summary of this file"
-        input_to_model.append(
-            {
-                "content": prompt,
-                "role": USER,
-            }
-        )
-        outputs, error = call_api(input_to_model, include_functions=False)
-        ai_summary = None
-        tries = 0
-        while error and tries < 2:
-            ai_summary = outputs
-            time.sleep(30)
-            tries += 1
-
-        if not error:
-            output = outputs[0]
-            ai_summary = output['text'].replace("\n", " ")
-            print_s(f" - {ai_summary}")
-            notes.append(f"{file} - {ai_summary}")
-            input_to_model.append(
-                {
-                    "content": ai_summary,
-                    "role": ASSISTANT,
-                }
-            )
-
-        time.sleep(4)
-
-        if len(input_to_model) > start_index + CONVERSATION_SUMMARY_RATE:
-            input_to_model = input_to_model[:start_index] + input_to_model[-int(CONVERSATION_SUMMARY_RATE/2):]
-        
-
-    print_s()
-    note_file = "\n".join(notes)
-    prompt = f"{note_file} \n\n Now summarize the repo for the user"
-    input_to_model.append(
-        {
-            "content": prompt,
-            "role": USER,
-        }
-    )
-    print_s("Summarizing...")
-    outputs, error = call_api(input_to_model, include_functions=False)
-    message = None
-    if error:
-        message = outputs
-    else:
-        message = outputs[0]['text']
-    print_and_save_ai_message_to_history(message, error)
-
-    # save as memory
-    using_memory = True
-    memory.insert(0, message)
-    add_and_write_memory(None)
     
 def check_for_max_actions():
     global actions
@@ -1064,16 +989,21 @@ def handle_function_call(name, args, tool_use_id, tool_use):
         command = command if command != None else ''
 
         allow = True
+        deny_reason = ""
         if (has_paths_outside_cwd(command)):
             print_s(f"{model_color}The assistant is trying to run a command outside the set directory '{command}'. Do you want to allow it (y/n)?: {ANSII_RESET}", end="")
             allow = input() == 'y'
             add_function_result(tool_use_id, tool_use, f"The user was prompted and has denied your request to run a command outside the sandboxed directory.")
+            deny_reason = "that was was going to be run outside directory"
         elif NO_GIT_COMMANDS and "git" in command:
             add_function_result(tool_use_id, tool_use, f"The user has diabled git commands and your command '{command}' appears to be one. Please don't use git commands")
             allow = False
+            deny_reason = "that looked like a git command"
         
         if allow:
             input_function_loop(command, tool_use_id, tool_use)
+        else:
+            print_s(f"{output_color}denied command {deny_reason}{ANSII_RESET}\n")
     elif name == "list_running_commands":
         result = "\n".join([command for _, command in running_commands])
         print_s(f"{output_color}{result}{ANSII_RESET}")
@@ -1204,7 +1134,7 @@ def input_function_loop(command, tool_use_id, tool_use):
         if process.is_finished(): break
 
         # otherwise send output to model
-        outputs, error = call_api(input_to_model)
+        outputs, error = call_api()
 
         # handle ai response
         if not error:
@@ -1280,7 +1210,7 @@ def prompt_ai_to_update_notes_and_shrink_history():
                 "role": USER,
             }
         )
-        outputs, error = call_api(input_to_model, include_functions=False)
+        outputs, error = call_api(include_functions=False)
 
         # delete that request from the conversation
         input_to_model = input_to_model[:-1]
@@ -1312,10 +1242,8 @@ def prompt_ai_to_update_notes_and_shrink_history():
 
         print_s()
 
-def call_api(model_input, include_functions=True):
-    global request_done
-    time_elapsed_displayer = threading.Thread(target=loading_indicator)
-    time_elapsed_displayer.start()
+def call_api(include_functions=True):
+    global request_done, input_to_model
 
     conn = None
     body = None
@@ -1324,14 +1252,14 @@ def call_api(model_input, include_functions=True):
         if include_functions:
             body = json.dumps({
                 "model": MODEL,
-                "input": convert_to_open_ai(model_input),
+                "input": convert_to_open_ai(input_to_model),
                 "tools": tools,
                 "tool_choice": "auto" if API == OPEN_AI else {"type":"auto"}
             })
         else:
             body = json.dumps({
                 "model": MODEL,
-                "input": convert_to_open_ai(model_input)
+                "input": convert_to_open_ai(input_to_model)
             })
 
         conn = http.client.HTTPSConnection("api.openai.com")
@@ -1349,7 +1277,7 @@ def call_api(model_input, include_functions=True):
             body = json.dumps({
                 "model": MODEL,
                 "max_tokens": 64000,
-                "messages": model_input,
+                "messages": input_to_model,
                 "tools": tools,
                 "tool_choice": "auto" if API == OPEN_AI else {"type":"auto"}
             })
@@ -1357,7 +1285,7 @@ def call_api(model_input, include_functions=True):
             body = json.dumps({
                 "model": MODEL,
                 "max_tokens": 1024,
-                "messages": model_input
+                "messages": input_to_model
             })
         conn = http.client.HTTPSConnection("api.anthropic.com")
         conn.request(
@@ -1371,47 +1299,54 @@ def call_api(model_input, include_functions=True):
             }
         )
         
-    response = conn.getresponse()
     output = None
-    error = False
-    if response.status == 200:
-        data = response.read()
-        response_body = json.loads(data)
-        if API == OPEN_AI:
-            output = []
-            for output_s in response_body['output']:
-                if output_s['type'] == 'message':
-                    output.append(
-                        {
-                            "type": "text",
-                            "role": output_s['role'],
-                            "text": output_s['content'][0]['text']
-                        }
-                    )
-                elif output_s['type'] == 'function_call':
-                    output.append(
-                        {
-                            "type": "tool_use",
-                            "id": output_s['call_id'],
-                            "name": output_s['name'],
-                            "input": json.loads(output_s['arguments'])
-                        }
-                    )
+    ex = ThreadPoolExecutor()
+    future = ex.submit(conn.getresponse)
+    
+    cancelled = loading_indicator(future)
+    if not cancelled:
+        response = future.result()
+        error = False
+        if response.status == 200:
+            data = response.read()
+            response_body = json.loads(data)
+            if API == OPEN_AI:
+                output = []
+                for output_s in response_body['output']:
+                    if output_s['type'] == 'message':
+                        output.append(
+                            {
+                                "type": "text",
+                                "role": output_s['role'],
+                                "text": output_s['content'][0]['text']
+                            }
+                        )
+                    elif output_s['type'] == 'function_call':
+                        output.append(
+                            {
+                                "type": "tool_use",
+                                "id": output_s['call_id'],
+                                "name": output_s['name'],
+                                "input": json.loads(output_s['arguments'])
+                            }
+                        )
+            else:
+                output = response_body['content']
+                
         else:
-            output = response_body['content']
-            
+            output = f"Error: {response.status} - {response.read().decode()}{ANSII_RESET}"
+            error = True
     else:
-        output = f"Error: {response.status} - {response.read().decode()}{ANSII_RESET}"
-        # print_s(body)
-        # print_s(output)
+        last_type = input_to_model[-1]["role"]
+        content = input_to_model[-1]["content"]
+        if last_type == USER and isinstance(content, str):
+            input_to_model = input_to_model[:-1]
+        output = "cancelled"
         error = True
+
+
     conn.close()
-
-    request_done = True
-    time_elapsed_displayer.join()
-    request_done = False
-
-
+    ex.shutdown(wait=False)
     return output, error
 
 stop = threading.Event()
@@ -1429,7 +1364,7 @@ def auto_mode_loop(max_attempts=100):
     while actions < max_attempts:
 
         # prompt ai and handle response
-        outputs, error = call_api(input_to_model)
+        outputs, error = call_api()
         actions += 1
         if not error:
 
