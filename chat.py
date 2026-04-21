@@ -530,6 +530,34 @@ def remove_line_numbers(text, sep="| "):
     lines = text.splitlines(keepends=True)
     return "".join(pattern.sub("", line) for line in lines)
 
+def get_and_show_diff(old_lines, new_lines):
+
+    diff = difflib.unified_diff(
+        old_lines,
+        new_lines,
+        fromfile='before',
+        tofile='after',
+        lineterm=''
+    )
+
+    # ANSI colors
+    RED = '\033[31m'
+    GREEN = '\033[32m'
+    CYAN = '\033[36m'
+    RESET = '\033[0m'
+
+    for line in diff:
+        if line.startswith('+') and not line.startswith('+++'):
+            print_s(f"{GREEN}{line}{RESET}", end='')
+        elif line.startswith('-') and not line.startswith('---'):
+            print_s(f"{RED}{line}{RESET}", end='')
+        elif line.startswith('@@'):
+            print_s(f"{CYAN}{line}{RESET}", end='')
+        else:
+            print_s(line, end='')
+
+    return ''.join(diff)
+
 def edit_lines(path, start_line, end_line, contents):
     start_line = int(start_line)
     end_line = int(end_line)
@@ -553,31 +581,7 @@ def edit_lines(path, start_line, end_line, contents):
         f.writelines(updated_lines)
 
     # ---- pretty print diff ----
-    diff = difflib.unified_diff(
-        old_lines,
-        updated_lines,
-        fromfile='before',
-        tofile='after',
-        lineterm=''
-    )
-
-    # ANSI colors
-    RED = '\033[31m'
-    GREEN = '\033[32m'
-    CYAN = '\033[36m'
-    RESET = '\033[0m'
-
-    for line in diff:
-        if line.startswith('+') and not line.startswith('+++'):
-            print_s(f"{GREEN}{line}{RESET}", end='')
-        elif line.startswith('-') and not line.startswith('---'):
-            print_s(f"{RED}{line}{RESET}", end='')
-        elif line.startswith('@@'):
-            print_s(f"{CYAN}{line}{RESET}", end='')
-        else:
-            print_s(line, end='')
-
-    return ''.join(diff)
+    return get_and_show_diff(old_lines, updated_lines)
 
 last_ai_file_view = {}
 def update_last_ai_file_view(path: Path):
@@ -664,7 +668,7 @@ def make_file_change_ai_message(p:Path):
     with open(p, 'r') as file:
         file_c = file.read()
     file_c = add_line_numbers(file_c)
-    return f"This file was edited since you last saw it. New contents: \n\n{file_c}"
+    return f"This file was edited since you last saw it, so your most recent edit won't be applied. New contents: \n\n{file_c}"
 
 class TalkProcess:
 
@@ -1046,11 +1050,19 @@ def handle_function_call(name, args, tool_use_id, tool_use):
         if file_edited_since_last_ai_edit(p):
             result = make_file_change_ai_message(p)
         else:
+            # get current lines
+            old_lines = []
+            if p.exists():
+                with open(path, 'r') as f:
+                    old_lines = f.readlines()
+
+            # write file
             p.parent.mkdir(parents=True, exist_ok=True)
             p.write_text(contents)
-            result = add_line_numbers(contents)
 
-            print_s(f"{output_color}{result}{ANSII_RESET}")
+            # show diff
+            new_lines = contents.split("\n")
+            result = get_and_show_diff(old_lines, new_lines)
             print_s()
 
         update_last_ai_file_view(p)
@@ -1068,6 +1080,7 @@ def handle_function_call(name, args, tool_use_id, tool_use):
                 result = make_file_change_ai_message(p)
             else:
                 result = edit_lines(p, start_line, end_line, contents)
+                print_s()
             update_last_ai_file_view(p)
         else:
             result = "file does not exist"
