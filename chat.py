@@ -442,6 +442,7 @@ Docs: https://developers.openai.com/api/docs/models/all, https://platform.claude
     elif user_input.strip() == "usage":
         # https://platform.claude.com/claude-code
         print_s(f"{model_color}Some apis don't expose usage statistics, so you'll have to log into the api dashboards to see this unfortunetly. \n\n{output_color}https://platform.claude.com/cost\nhttps://platform.openai.com/usage{ANSII_RESET}\n")
+        print_s(f"{model_color}Pricing. \n\n{output_color}https://platform.claude.com/docs/en/about-claude/pricing\nhttps://developers.openai.com/api/docs/pricing{ANSII_RESET}\n")
         user_input = ''
     elif user_input.strip() == "help":
         print_s(model_color)
