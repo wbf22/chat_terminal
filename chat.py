@@ -23,6 +23,7 @@ import time
 import difflib
 import re
 import tty
+import readline
 from typing import Optional
 
 
@@ -175,7 +176,7 @@ def print_s(
     history.append(sep.join(strip_ansi(str(v)) for v in values) + (end or ""))
     print(*values, sep=sep, end=end, flush=flush, file=file)
 
-USER_TAG = 'YOU: (hit enter twice to submit, type help for special commands, type \'vim\' to edit your prompt with vim)'
+USER_TAG = 'YOU: (hit shift+enter to submit, type \'help\' for special commands, enter \'vim\' to edit your prompt with vim)'
 def print_and_save_user_input_to_history():
 
     # get prompt
@@ -263,20 +264,21 @@ def promp_ai_for_memory():
     return new_mem
 
 def smart_input():
+    
     # keeps reading lines until the user hits double enter
     lines = []
     while True:
         rlist, _, _ = select.select([sys.stdin], [], [], 0.01)
         line = sys.stdin.readline().rstrip("\n")
-        if not rlist:
-            if line == "":
-                break
-        if line[-1] == "\x1b":
+        # break out on shift enter
+        if len(line) > 0 and line[-1] == "\x1b":
             if line == "\x1b":
                 print(f"\033[1A\033[K", flush=True)
             else:
                 print(f"\033[1A\033[{len(line)-1}C\033[K", flush=True)
             line = line[:-1]
+            lines.append(line)
+            break
         lines.append(line)
 
     return "\n".join(lines)
@@ -1010,7 +1012,7 @@ def handle_function_call(name, args, tool_use_id, tool_use):
         else:
             print_s(f"{output_color}denied command {deny_reason}{ANSII_RESET}\n")
     elif name == "list_running_commands":
-        result = "\n".join([command for _, command in running_commands])
+        result = "\n".join([running_commands[key] for key in running_commands])
         print_s(f"{output_color}{result}{ANSII_RESET}")
         print_s()
         add_function_result(tool_use_id, tool_use, result)
