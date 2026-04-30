@@ -176,7 +176,7 @@ def print_s(
     history.append(sep.join(strip_ansi(str(v)) for v in values) + (end or ""))
     print(*values, sep=sep, end=end, flush=flush, file=file)
 
-USER_TAG = 'YOU: (hit shift+enter to submit, type \'help\' for special commands, enter \'vim\' to edit your prompt with vim)'
+USER_TAG = 'YOU: (tab+enter to submit, type \'help\' for special commands, enter \'vim\' to edit your prompt with vim)'
 def print_and_save_user_input_to_history():
 
     # get prompt
@@ -268,11 +268,11 @@ def smart_input():
     # keeps reading lines until the user hits double enter
     lines = []
     while True:
-        rlist, _, _ = select.select([sys.stdin], [], [], 0.01)
+        # rlist, _, _ = select.select([sys.stdin], [], [], 0.01)
         line = sys.stdin.readline().rstrip("\n")
         # break out on shift enter
-        if len(line) > 0 and line[-1] == "\x1b":
-            if line == "\x1b":
+        if len(line) > 0 and line[-1] == "\t":
+            if line == "\t":
                 print(f"\033[1A\033[K", flush=True)
             else:
                 print(f"\033[1A\033[{len(line)-1}C\033[K", flush=True)
