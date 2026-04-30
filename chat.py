@@ -272,10 +272,10 @@ def smart_input():
         line = sys.stdin.readline().rstrip("\n")
         # break out on shift enter
         if len(line) > 0 and line[-1] == "\t":
-            if line == "\t":
-                print(f"\033[1A\033[K", flush=True)
-            else:
-                print(f"\033[1A\033[{len(line)-1}C\033[K", flush=True)
+            # if line == "\t":
+            #     print(f"\033[1A\033[K", flush=True)
+            # else:
+            #     print(f"\033[1A\033[{len(line)-1}C\033[K", flush=True)
             line = line[:-1]
             lines.append(line)
             break
