@@ -742,7 +742,8 @@ def define_model_functions():
         },
         {
             "name": "list_running_commands",
-            "description": "If you launch multiple commands at once, this is useful to see how many commands are running"
+            "description": "If you launch multiple commands at once, this is useful to see how many commands are running",
+            params_name: { "type": "object", "properties": {}}
         },
         {
             "name": "done",
